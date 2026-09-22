@@ -9,6 +9,7 @@
     { "id": "quarry", "name": "Каменоломня", "hp": 600, "cost": { "wood": 120, "food": 50 }, "workers": 4, "stonePerSec": 1.5 },
     { "id": "mine", "name": "Шахта", "hp": 700, "cost": { "wood": 150, "stone": 100 }, "workers": 5, "ironPerSec": 1.1, "needs": "hill" },
     { "id": "barracks", "name": "Казармы", "hp": 1200, "cost": { "wood": 250, "stone": 100 }, "workers": 4, "requires": "townhall-2" },
+    { "id": "forge", "name": "Кузница", "hp": 700, "cost": { "wood": 200, "stone": 150 }, "workers": 3, "requires": "townhall-2" },
     { "id": "shooting_range", "name": "Стрельбище", "hp": 1000, "cost": { "wood": 220, "stone": 120 }, "workers": 3, "requires": "townhall-2" },
     { "id": "stable", "name": "Конюшня", "hp": 1200, "cost": { "wood": 300, "iron": 200, "gold": 100 }, "workers": 4, "requires": "townhall-3" },
     { "id": "siege_workshop", "name": "Осадная мастерская", "hp": 1200, "cost": { "wood": 350, "iron": 300, "gold": 200 }, "workers": 5, "requires": "townhall-3" },

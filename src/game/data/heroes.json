@@ -36,9 +36,35 @@
     }
   ],
   "xpCurve": "100 * level^1.5",
-  "maxLevel": 15,
+  "maxLevel": 30,
   "xpKills": { "militia": 10, "elite": 40, "base": 20, "hero": 200, "bandits": 200, "wolves": 50, "flag": 150 },
   "eliteTypes": ["heavy_cav", "guard_nord", "nukers", "halberdiers", "ballista", "trebuchet"],
   "gearSlots": ["weapon", "armor", "mount", "amulet"],
-  "respawnSec": 30
+  "respawnSec": 30,
+  "perks": {
+    "warlord": [
+      { "level": 5, "options": [{ "id": "w5a", "name": "Закалка (+150 HP)", "fx": { "hp": 150 } }, { "id": "w5b", "name": "Клич (+5 морали)", "fx": { "morale": 5 } }] },
+      { "level": 10, "options": [{ "id": "w10a", "name": "Прорыв (+6 урона)", "fx": { "dmg": 6 } }, { "id": "w10b", "name": "Щитоносец (+100 HP)", "fx": { "hp": 100 } }] },
+      { "level": 15, "options": [{ "id": "w15a", "name": "Казнь (+10 урона)", "fx": { "dmg": 10 } }, { "id": "w15b", "name": "Марш (+5% скорости)", "fx": { "speed": 0.05 } }] },
+      { "level": 20, "options": [{ "id": "w20a", "name": "Аватара (+12 урона)", "fx": { "dmg": 12 } }, { "id": "w20b", "name": "Дань (+30 маны)", "fx": { "mana": 30 } }] },
+      { "level": 25, "options": [{ "id": "w25a", "name": "Титан (+200 HP)", "fx": { "hp": 200 } }, { "id": "w25b", "name": "Натиск (+8% скорости)", "fx": { "speed": 0.08 } }] },
+      { "level": 30, "options": [{ "id": "w30a", "name": "Легенда (+15 урона)", "fx": { "dmg": 15 } }, { "id": "w30b", "name": "Источник (+50 маны)", "fx": { "mana": 50 } }] }
+    ],
+    "steward": [
+      { "level": 5, "options": [{ "id": "s5a", "name": "Каменщик (+120 HP)", "fx": { "hp": 120 } }, { "id": "s5b", "name": "Кладовщик (+30 маны)", "fx": { "mana": 30 } }] },
+      { "level": 10, "options": [{ "id": "s10a", "name": "Караван (+40 маны)", "fx": { "mana": 40 } }, { "id": "s10b", "name": "Народная война (+6 урона)", "fx": { "dmg": 6 } }] },
+      { "level": 15, "options": [{ "id": "s15a", "name": "Крепость (+150 HP)", "fx": { "hp": 150 } }, { "id": "s15b", "name": "Тракт (+5% скорости)", "fx": { "speed": 0.05 } }] },
+      { "level": 20, "options": [{ "id": "s20a", "name": "Градоначальник (+5 морали)", "fx": { "morale": 5 } }, { "id": "s20b", "name": "Золотой запас (+50 маны)", "fx": { "mana": 50 } }] },
+      { "level": 25, "options": [{ "id": "s25a", "name": "Оплот (+200 HP)", "fx": { "hp": 200 } }, { "id": "s25b", "name": "Обозный (+8% скорости)", "fx": { "speed": 0.08 } }] },
+      { "level": 30, "options": [{ "id": "s30a", "name": "Хозяин земель (+15 урона)", "fx": { "dmg": 15 } }, { "id": "s30b", "name": "Казначей (+50 маны)", "fx": { "mana": 50 } }] }
+    ],
+    "ranger": [
+      { "level": 5, "options": [{ "id": "r5a", "name": "Зоркий (+5% скорости)", "fx": { "speed": 0.05 } }, { "id": "r5b", "name": "Лесной брат (+80 HP)", "fx": { "hp": 80 } }] },
+      { "level": 10, "options": [{ "id": "r10a", "name": "Снайпер (+8 урона)", "fx": { "dmg": 8 } }, { "id": "r10b", "name": "Волчий шаг (+8% скорости)", "fx": { "speed": 0.08 } }] },
+      { "level": 15, "options": [{ "id": "r15a", "name": "Тропа (+5% скорости)", "fx": { "speed": 0.05 } }, { "id": "r15b", "name": "Охотник (+10 урона)", "fx": { "dmg": 10 } }] },
+      { "level": 20, "options": [{ "id": "r20a", "name": "Призрак (+100 HP)", "fx": { "hp": 100 } }, { "id": "r20b", "name": "Всевидящий (+40 маны)", "fx": { "mana": 40 } }] },
+      { "level": 25, "options": [{ "id": "r25a", "name": "Тень (+200 HP)", "fx": { "hp": 200 } }, { "id": "r25b", "name": "Ветер (+8% скорости)", "fx": { "speed": 0.08 } }] },
+      { "level": 30, "options": [{ "id": "r30a", "name": "Гроза (+15 урона)", "fx": { "dmg": 15 } }, { "id": "r30b", "name": "Ясность (+50 маны)", "fx": { "mana": 50 } }] }
+    ]
+  }
 }

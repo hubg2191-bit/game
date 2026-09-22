@@ -49,6 +49,7 @@ export class GameRender {
     this.buildStatics(state);
     this.buildFog(state);
     this.buildRiver(state);
+    this.buildMountains(state);
 
     this.dyn = new THREE.Group(); // здания, отряды, флаги
     this.scene.add(this.dyn);
@@ -96,7 +97,7 @@ export class GameRender {
 
   teamMat(owner) {
     if (owner === 'neutral') return this.teamMats.neutral;
-    return this.teamMats[{ player: 'p0', ally: 'p2', enemy1: 'p1', enemy2: 'p3', bot: 'p1' }[owner] || 'p1'];
+    return this.teamMats[{ player: 'p0', ally: 'p2', enemy1: 'p1', enemy2: 'p2', enemy3: 'p3', bot: 'p1' }[owner] || 'p1'];
   }
 
   buildGround(state) {
@@ -245,6 +246,55 @@ export class GameRender {
       ford.position.set(r.x, 0.3, r.ford.z);
       this.scene.add(ford);
     }
+  }
+
+  buildMountains(state) {
+    const mt = state.mountains;
+    if (mt) {
+      const W = this.worldSize;
+      const mat = new THREE.MeshStandardMaterial({ color: 0x5a5f6b, roughness: 1 });
+      // хребет полосами, разрывы — проходы
+      const segs = [];
+      let z0 = 0;
+      const gaps = [...mt.gaps].sort((a, b) => a.z - b.z);
+      for (const gp of gaps) {
+        segs.push([z0, gp.z - gp.half]);
+        z0 = gp.z + gp.half;
+      }
+      segs.push([z0, W]);
+      for (const [a, b] of segs) {
+        if (b - a < 1) continue;
+        const ridge = new THREE.Mesh(new THREE.BoxGeometry(mt.half * 2, 7, b - a), mat);
+        ridge.position.set(mt.x, 3.5, (a + b) / 2);
+        this.scene.add(ridge);
+      }
+    }
+    // пинги коопа
+    this.pingRings = [];
+    for (let i = 0; i < 4; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(2.2, 2.8, 32),
+        new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.visible = false;
+      this.scene.add(ring);
+      this.pingRings.push(ring);
+    }
+  }
+
+  syncPings(state) {
+    if (!this.pingRings) return;
+    let i = 0;
+    for (const pg of state.pings) {
+      if (i >= this.pingRings.length) break;
+      const ring = this.pingRings[i++];
+      ring.visible = true;
+      ring.position.set(pg.x, 0.2, pg.z);
+      const s = 1 + (8 - pg.t) * 0.15;
+      ring.scale.setScalar(s);
+    }
+    for (; i < this.pingRings.length; i++) this.pingRings[i].visible = false;
   }
 
   drawFog(state) {
@@ -572,6 +622,7 @@ export class GameRender {
     this.syncFlags(state);
     this.syncRings(sel);
     this.syncMarks(state);
+    this.syncPings(state);
     this.syncBars(state, null);
     this.controls.update();
     this.renderer.render(this.scene, this.camera);

@@ -3,22 +3,30 @@ import './style.css';
 import * as THREE from 'three';
 import {
   createGame, update, orderMove, orderAttack, recruit, construct, upgrade, trade, castSkill,
+  setDirective, giveAlly, forgeUpgrade,
   SIM_TICK_HZ, WORLD_SCALE, DIFFS, teamOf, defOf, heroOf,
 } from './game/sim.js';
 import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
-import { loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear, xpNext } from './game/meta.js';
+import {
+  loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear,
+  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext,
+} from './game/meta.js';
+import { MISSIONS, setupMission, missionProgress, missionDone } from './game/missions.js';
 import unitsData from './game/data/units.json';
 import buildingsData from './game/data/buildings.json';
 import palette from './game/data/palette.json';
 import racesData from './game/data/races.json';
 import heroesData from './game/data/heroes.json';
+import questsData from './game/data/quests.json';
 import mapPlain from './game/data/maps/skirmish-plain.json';
 import mapRiver from './game/data/maps/skirmish-river.json';
+import mapPass from './game/data/maps/skirmish-pass.json';
 
 const MAPS = [
   { id: 'plain', name: 'Равнина 1v1', data: mapPlain, mode: '1v1' },
   { id: 'river', name: 'Речная долина 2v2', data: mapRiver, mode: '2v2' },
+  { id: 'pass', name: 'Перевал FFA', data: mapPass, mode: 'ffa' },
 ];
 const rules = unitsData.rules;
 const app = document.querySelector('#app');
@@ -42,16 +50,23 @@ function ndcOf(e, renderer) {
 
 function startMatch(lobbyCfg, replayRec = null, meta = null) {
   sceneEl.innerHTML = '';
-  const map = MAPS.find((m) => m.id === lobbyCfg.map) || MAPS[0];
+  const mission = lobbyCfg.mission ? MISSIONS.find((m) => m.id === lobbyCfg.mission) : null;
+  const map = mission ? MAPS[0] : MAPS.find((m) => m.id === lobbyCfg.map) || MAPS[0];
   const capLv = meta?.capital.thLevel || 1;
   const cfg = {
     mode: map.mode,
     races: { player: lobbyCfg.race },
-    difficulty: lobbyCfg.difficulty,
+    difficulty: mission ? (mission.vsEasy ? 'easy' : 'passive') : lobbyCfg.difficulty,
     seed: replayRec ? replayRec.seed : Math.floor(Math.random() * 1e9),
     heroesData,
-    hero: replayRec?.hero || { arch: meta?.hero.arch || 'warlord', level: meta?.hero.level || 1, gear: meta?.hero.gear || {} },
+    hero: replayRec?.hero || {
+      arch: mission?.hero || meta?.hero.arch || 'warlord',
+      level: meta?.hero.level || 1,
+      gear: meta?.hero.gear || {},
+      perks: meta?.hero.perks || [],
+    },
     startBonus: { gold: 100 * (capLv - 1), food: 50 * (capLv - 1) }, // бонусы столицы
+    missionNoEnd: !!mission && mission.id !== 'm5',
   };
   // ботам — случайные другие расы (детерминировано из сида)
   const raceIds = racesData.races.map((r) => r.id).filter((r) => r !== cfg.races.player);
@@ -64,6 +79,7 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   }
   const state = createGame(map.data, unitsData, buildingsData, rules, racesData, cfg);
   window.__state = state;
+  if (mission) setupMission(state, mission.id);
   const render = new GameRender(sceneEl, state, palette);
   const sel = { squads: [], building: null };
   const groups = {};
@@ -81,19 +97,42 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     if (isReplay || !started || state.over) return;
     rec.orders.push({ tick: state.tick, fn, args });
   };
+  // Античит 1.0: лимит 10 приказов/сек, спам режется
+  const apmTimes = [];
+  let apmCount = 0;
+  const apmTick = () => {
+    const now = performance.now();
+    while (apmTimes.length && now - apmTimes[0] > 1000) apmTimes.shift();
+    apmCount = apmTimes.length;
+  };
+  const throttle = () => {
+    apmTick();
+    if (apmTimes.length >= 10) return false;
+    apmTimes.push(performance.now());
+    apmCount = apmTimes.length;
+    return true;
+  };
 
   const ui = new GameUI(app.querySelector('#hud'), {
     onRecruit: (bId, unitId) => {
-      if (isReplay) return;
+      if (isReplay || !throttle()) return;
       if (recruit(state, 'player', bId, unitId)) record('recruit', ['player', bId, unitId]);
     },
     onUpgrade: (bId) => {
-      if (isReplay) return;
+      if (isReplay || !throttle()) return;
       if (upgrade(state, 'player', bId)) record('upgrade', ['player', bId]);
     },
     onTrade: () => {
-      if (isReplay) return;
+      if (isReplay || !throttle()) return;
       if (trade(state, 'player')) record('trade', ['player']);
+    },
+    onGive: () => {
+      if (isReplay || !throttle()) return;
+      if (giveAlly(state, 'player')) record('give', ['player']);
+    },
+    onForgeUp: (bId) => {
+      if (isReplay || !throttle()) return;
+      if (forgeUpgrade(state, 'player', bId)) record('forgeUp', ['player', bId]);
     },
     onBuild: (typeId) => {
       buildMode = buildMode === typeId ? null : typeId;
@@ -105,7 +144,7 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       }
     },
     onSkill: (slot) => {
-      if (isReplay || !started) return;
+      if (isReplay || !started || !throttle()) return;
       const h = heroAlive();
       if (!h) return;
       const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
@@ -132,12 +171,12 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   const W = map.data.size_m * WORLD_SCALE;
 
   const doMoveOrder = (x, z) => {
-    if (isReplay || !started) return;
+    if (isReplay || !started || !throttle()) return;
     orderMove(state, sel.squads, x, z);
     record('orderMove', [sel.squads.slice(), x, z]);
   };
   const doAttackOrder = (ent) => {
-    if (isReplay || !started) return;
+    if (isReplay || !started || !throttle()) return;
     orderAttack(state, sel.squads, ent);
     record('orderAttack', [sel.squads.slice(), ent]);
   };
@@ -206,7 +245,11 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     } else {
       const pt = render.groundPoint(ndcOf(e, render.renderer));
       const ent = render.pick(ndcOf(e, render.renderer));
-      if (pendingSkill && ent) {
+      if (e.altKey && pt && state.pids.includes('ally')) {
+        // Alt+клик — пинг атаки союзнику (controls.md)
+        setDirective(state, { kind: 'attack', x: pt.x, z: pt.z });
+        record('directive', [{ kind: 'attack', x: pt.x, z: pt.z }]);
+      } else if (pendingSkill && ent) {
         // прицельный скилл героя
         const h = heroAlive();
         if (h && castSkill(state, 'player', h.id, pendingSkill, ent)) {
@@ -293,6 +336,20 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     }
     if (!started || state.over) return;
     if (e.code === 'KeyA') attackMode = true;
+    if (e.code === 'F1' && state.pids.includes('ally')) {
+      // пинг атаки в центр экрана
+      const t = render.controls.target;
+      setDirective(state, { kind: 'attack', x: t.x, z: t.z });
+      record('directive', [{ kind: 'attack', x: t.x, z: t.z }]);
+    }
+    if (e.code === 'F2' && state.pids.includes('ally')) {
+      setDirective(state, { kind: 'defend' });
+      record('directive', [{ kind: 'defend' }]);
+    }
+    if (e.code === 'F4' && state.pids.includes('ally')) {
+      setDirective(state, { kind: 'follow' });
+      record('directive', [{ kind: 'follow' }]);
+    }
     if (e.code === 'KeyS') {
       for (const s of state.squads) {
         if (sel.squads.includes(s.id)) s.order = { kind: 'move', x: s.x, z: s.z };
@@ -366,6 +423,9 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     construct: (a) => construct(state, a[0], a[1], a[2], a[3]),
     upgrade: (a) => upgrade(state, a[0], a[1]),
     trade: (a) => trade(state, a[0]),
+    give: (a) => giveAlly(state, a[0]),
+    forgeUp: (a) => forgeUpgrade(state, a[0], a[1]),
+    directive: (a) => setDirective(state, a[0]),
     skill: (a) => {
       // id героя может смениться после респауна — ищем живого героя владельца
       const h = state.squads.find((s) => s.owner === a[0] && s.type === 'hero' && s.count > 0);
@@ -376,12 +436,22 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     },
   };
 
-  // финиш матча: MMR, награды в мету, шмот, реплей
+  // финиш миссии 1-4: награда в мету, выход к столице
   let finished = false;
+  function finishMission() {
+    if (finished) return;
+    finished = true;
+    let text = '';
+    if (meta && !isReplay) {
+      text = grantMissionReward(meta, mission.reward, heroesData.maxLevel);
+    }
+    ui.objectives(null);
+    ui.showMissionEnd(mission, text);
+  }
   function finishMatch() {
     if (finished) return;
     finished = true;
-    const win = state.winner === 'A';
+    const win = state.mode === 'ffa' ? state.winner === 'player' : state.winner === 'A';
     mmr = Math.max(100, Math.min(3000, mmr + (win ? 25 : -20)));
     localStorage.setItem('tt_mmr', String(mmr));
     let rewardText = '';
@@ -389,12 +459,25 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       const heroSq = state.squads.find((s) => s.owner === 'player' && s.type === 'hero');
       const xp = heroSq?.hero.xpBattle || 0;
       const rw = applyBattleResult(meta, { win, xp, goldEarned: 0, maxLevel: heroesData.maxLevel });
+      rewardText = `Награды: +${rw.gold}🪙 +${rw.xp + xp} XP${rw.capped ? ' (дейли-кап!)' : ''}`;
+      if (mission?.id === 'm5' && win) {
+        rewardText += ' • Миссия: ' + grantMissionReward(meta, mission.reward, heroesData.maxLevel);
+      }
       for (const tier of state.droppedGear) {
         const item = rollGear(Math.random, tier);
         meta.hero.inventory.push(item);
       }
+      if (state.droppedGear.length) rewardText += ` • Шмот: ${state.droppedGear.length} шт.`;
       saveMeta(meta);
-      rewardText = `Награды: +${rw.gold}🪙 +${rw.xp + xp} XP${rw.capped ? ' (дейли-кап!)' : ''}${state.droppedGear.length ? ` • Шмот: ${state.droppedGear.length} шт.` : ''}`;
+      // квесты таверны + автосезон
+      const qdone = settleQuests(meta, questsData, {
+        wood: state.quest.wood, food: state.quest.food, neutrals: state.quest.neutrals,
+        flagSec: state.quest.flagSec, battles: 1, orders: rec.orders.length,
+        heroKills: state.quest.heroKills || 0, built: state.quest.built,
+        marks: state.quest.marks, heroArch: meta.hero.arch, wins: win ? 1 : 0,
+      });
+      if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
+      if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
     }
     try {
       localStorage.setItem('tt_last_replay', JSON.stringify(rec));
@@ -460,8 +543,18 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     }
     panCamera(dt);
     render.sync(state, sel, dt);
-    ui.update(state, sel);
+    apmTick();
+    ui.update(state, sel, apmCount);
     ui.heroPanel(state, heroesData);
+    if (mission && mission.id !== 'm5' && started && !state.over) {
+      const prog = missionProgress(state, mission.id);
+      ui.objectives(prog);
+      if (prog.every((o) => o.done)) {
+        ui.objectives(null);
+        finishMission();
+        return;
+      }
+    }
     if (state.over) finishMatch();
   }
 
@@ -495,15 +588,18 @@ function openLobby() {
   bootUI.showLobby(
     {
       maps: MAPS.map((m) => ({ id: m.id, name: m.name })),
+      missions: MISSIONS,
       races: racesData.races,
-      diffs: Object.entries(DIFFS).map(([id, d]) => ({ id, label: d.label })),
+      diffs: Object.entries(DIFFS).filter(([id]) => id !== 'passive').map(([id, d]) => ({ id, label: d.label })),
       mmr,
     },
     (cfg) => startMatch(cfg, null, meta)
   );
 }
-bootUI.showMeta(meta, { heroesData, racesData, offline }, {
+bootUI.showMeta(meta, { heroesData, racesData, questsData, offline }, {
   onArch: (arch) => { meta.hero.arch = arch; saveMeta(meta); },
+  onPerk: (id) => { meta.hero.perks.push(id); saveMeta(meta); },
+  onCraft: (itemId) => { craftPurple(meta, itemId); },
   onEquip: (id) => {
     const ix = (meta.hero.inventory || []).findIndex((it) => it.id === id);
     if (ix < 0) return;
