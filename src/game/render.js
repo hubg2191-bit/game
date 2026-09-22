@@ -75,7 +75,17 @@ export class GameRender {
     this.tracers = [];
     this.tracerGeo = new THREE.BoxGeometry(0.25, 0.25, 1);
     this.tracerMat = new THREE.MeshBasicMaterial({ color: 0xffe08a });
-    for (let i = 0; i < 48; i++) {
+    this.markRings = [];
+    for (let i = 0; i < 8; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(2.6, 3.1, 32),
+        new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.visible = false;
+      this.scene.add(ring);
+      this.markRings.push(ring);
+    }    for (let i = 0; i < 48; i++) {
       const mesh = new THREE.Mesh(this.tracerGeo, this.tracerMat);
       mesh.visible = false;
       this.scene.add(mesh);
@@ -371,12 +381,50 @@ export class GameRender {
         mesh.userData.entity = { kind: 'squad', id: s.id };
         g.add(mesh);
       }
+      if (s.type === 'hero') {
+        // герой в 1.5 раза крупнее + золотая метка (leveling-gear.md вид)
+        g.scale.setScalar(1.45);
+        const crown = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.5),
+          new THREE.MeshBasicMaterial({ color: 0xffd76a })
+        );
+        crown.position.y = 2.6;
+        g.userData.crown = crown;
+        g.add(crown);
+        const auraR = s.hero ? 5.5 : 5.5;
+        const aura = new THREE.Mesh(
+          new THREE.RingGeometry(auraR - 0.3, auraR, 48),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
+        );
+        aura.rotation.x = -Math.PI / 2;
+        aura.position.y = 0.12;
+        g.userData.aura = aura;
+        g.add(aura);
+      }
       this.dyn.add(g);
       this.sMeshes.set(s.id, g);
     }
     g.position.set(s.x, 0, s.z);
     g.visible = isVisible(this.state, s);
     g.rotation.y = s.face || 0;
+    if (g.userData.crown) g.userData.crown.rotation.y += 0.03;
+    if (g.userData.aura) g.userData.aura.visible = s.owner === 'player' || teamOf(this.state, s.owner) === 'A';
+    // засада: полупрозрачность (материалы клонируем один раз)
+    const ghost = (s.invisT || 0) > 0;
+    if (ghost !== !!g.userData.ghost) {
+      g.userData.ghost = ghost;
+      for (const child of g.children) {
+        if (!child.isMesh || child === g.userData.crown || child === g.userData.aura) continue;
+        if (ghost && !child.userData.ownMat) {
+          child.material = child.material.clone();
+          child.userData.ownMat = true;
+        }
+        if (child.userData.ownMat) {
+          child.material.transparent = ghost;
+          child.material.opacity = ghost ? 0.35 : 1;
+        }
+      }
+    }
     // рассыпной строй — бойцы шире
     const spread = s.loose ? 2 : 1;
     let i = 0;
@@ -421,8 +469,7 @@ export class GameRender {
     }
   }
 
-  syncRings(sel) {
-    const want = new Set();
+  syncRings(sel) {    const want = new Set();
     for (const id of sel.squads) want.add(`squad:${id}`);
     if (sel.building) want.add(`building:${sel.building}`);
     for (const [key, ring] of this.rings) {
@@ -474,7 +521,7 @@ export class GameRender {
       const sx = (v.x * 0.5 + 0.5) * innerWidth;
       const sy = (-v.y * 0.5 + 0.5) * innerHeight;
       el.style.transform = `translate(${sx - 30}px, ${sy}px)`;
-      el.querySelector('.hpfill').style.width = `${Math.max(0, frac * 100)}%`;
+      el.querySelector('.hpfill').style.width = `${Math.max(0, Math.min(100, frac * 100))}%`;
       el.querySelector('.hplabel').textContent = label || '';
       el.style.display = 'block';
     };
@@ -524,9 +571,28 @@ export class GameRender {
     }
     this.syncFlags(state);
     this.syncRings(sel);
+    this.syncMarks(state);
     this.syncBars(state, null);
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  syncMarks(state) {
+    let i = 0;
+    const mark = (x, z, s) => {
+      if (i >= this.markRings.length) return;
+      const ring = this.markRings[i++];
+      ring.visible = true;
+      ring.position.set(x, 0.18, z);
+      ring.scale.setScalar((s || 1) * (1 + 0.08 * Math.sin(state.t * 6)));
+    };
+    for (const s of state.squads) {
+      if ((s.markT || 0) > 0 && isVisible(state, s)) mark(s.x, s.z, s.type === 'hero' ? 1.4 : 1.6);
+    }
+    for (const b of state.buildings) {
+      if ((b.markT || 0) > 0 && b.hp > 0 && isVisible(state, b)) mark(b.x, b.z, 2.2);
+    }
+    for (; i < this.markRings.length; i++) this.markRings[i].visible = false;
   }
 
   pick(ndc) {

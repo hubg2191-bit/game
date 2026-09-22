@@ -32,7 +32,7 @@ const UNIQUE_UNIT_NEED = { guard_nord: 'hall_nord', nukers: 'tabun_kaganat', hal
 export function recruitable(state, pid, btype) {
   const list = [...(BASE_RECRUIT[btype] || [])];
   const race = state.raceOf[pid];
-  const R = (state.racesData.races || []).find((r) => r.id === race);
+  const R = (state.racesData?.races || []).find((r) => r.id === race);
   if (R && btype === 'barracks' && R.uniqueUnit !== 'nukers'
     && state.buildings.some((b) => b.owner === pid && b.type === R.uniqueBuilding && b.hp > 0)) {
     if (R.uniqueUnit === 'guard_nord' || R.uniqueUnit === 'halberdiers') list.push(R.uniqueUnit);
@@ -75,7 +75,7 @@ export const MVP_BUILD_MENU = [
 // Уникальное здание расы добавляется в меню отдельно (см. buildMenuFor)
 export function buildMenuFor(state, pid) {
   const list = [...MVP_BUILD_MENU];
-  const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]);
+  const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[pid]);
   if (R && !list.includes(R.uniqueBuilding)) {
     const ix = list.indexOf('siege_workshop');
     list.splice(ix + 1, 0, R.uniqueBuilding);
@@ -91,10 +91,28 @@ const nid = () => nextId++;
 export function unitById(unitsData, id) {
   return unitsData.squads.find((u) => u.id === id);
 }
-// def отряда по типу с учётом нейтралов (их нет в units.json)
+// def отряда по типу с учётом нейтралов (их нет в units.json) и героев (статы из меты)
 export function defOf(state, type, owner) {
+  if (type === 'hero') return state.heroStats?.[owner];
   if (owner === 'neutral') return NEUTRAL_DEFS[type];
   return unitById(state.units, type);
+}
+// Статы героя: база + рост за уровень + шмот (heroes/*.md, leveling-gear.md)
+export function computeHeroDef(heroesData, arch, level, gearStats = {}) {
+  const H = heroesData.heroes.find((h) => h.id === arch);
+  const g = (k) => gearStats[k] || 0;
+  const str = H.stats.str + H.growth.str * (level - 1) + g('str');
+  const adm = H.stats.adm + H.growth.adm * (level - 1) + g('adm');
+  const spi = H.stats.spi + H.growth.spi * (level - 1) + g('spi');
+  return {
+    id: 'hero', name: H.name, size: 1,
+    hpPer: H.base.hp + 60 * (level - 1) + g('hp'),
+    dmg: H.base.dmg + (str - H.stats.str) * 3 + g('dmg'),
+    armor: H.base.armor, speed: H.base.speed * (1 + g('speed')), range: H.base.range,
+    sight: H.base.sight, auraR: H.base.auraR,
+    cost: {}, upkeep: { food: 1.0, gold: 0.2 },
+    str, adm, spi, manaMax: Math.round(100 + spi * 10 + g('mana')),
+  };
 }
 export function buildingById(buildingsData, id) {
   return buildingsData.buildings.find((b) => b.id === id);
@@ -182,6 +200,43 @@ function spawnNeutrals(state) {
   }
 }
 
+// ---------- герои 0.4 ----------
+export function heroOf(state, pid) {
+  return state.squads.find((s) => s.owner === pid && s.type === 'hero' && s.count > 0);
+}
+function gearStatsOf(gear = {}) {
+  const total = {};
+  for (const item of Object.values(gear)) {
+    for (const [k, v] of Object.entries(item.stats || {})) total[k] = (total[k] || 0) + v;
+  }
+  return total;
+}
+function spawnHero(state, pid, arch, level, gear) {
+  const gs = gearStatsOf(gear);
+  const def = computeHeroDef(state.heroesData, arch, level, gs);
+  state.heroStats[pid] = def;
+  const base = state.players[pid];
+  const s = addSquad(state, pid, 'hero', base._bx, base._bz + 14, { def });
+  s.hero = {
+    arch, level, gearMorale: gs.morale || 0,
+    mana: def.manaMax, qCd: 0, eCd: 0, xpBattle: 0,
+  };
+  return s;
+}
+// Опыт за фраг (leveling-gear.md): засчитывается герою-убийце в радиусе 30м
+function awardXp(state, pid, amount) {
+  const h = heroOf(state, pid);
+  if (h) h.hero.xpBattle += amount;
+}
+function xpForVictim(state, e) {
+  const X = state.heroesData?.xpKills || {};
+  if (e.type === 'hero') return X.hero ?? 200;
+  if (e.owner === 'neutral') return X[e.type] ?? 50;
+  if ((state.heroesData?.eliteTypes || []).includes(e.type)) return X.elite ?? 40;
+  if (e.type === 'militia') return X.militia ?? 10;
+  return X.base ?? 20;
+}
+
 function addBuilding(state, owner, typeId, x, z, opts = {}) {
   const def = buildingById(state.bdefs, typeId);
   const hp = Array.isArray(def.hp) ? def.hp[0] : def.hp || 500;
@@ -219,7 +274,8 @@ function baseLayout(sx, sz) {
   ].map(([type, dx, dz]) => ({ type, x: sx + dx, z: sz + dz }));
 }
 
-// cfg: { mode: '1v1'|'2v2', races: {player, bot?, ally?, enemy1?, enemy2?}, difficulty: 'easy'|'normal'|'hard', seed }
+// cfg: { mode: '1v1'|'2v2', races: {player, bot?, ally?, enemy1?, enemy2?}, difficulty: 'easy'|'normal'|'hard', seed,
+//        heroesData, hero: {arch, level, gear} }
 export const DIFFS = {
   easy: { econ: 0.8, aggro: 3, label: 'Легко' },
   normal: { econ: 1.0, aggro: 2, label: 'Норма' },
@@ -253,8 +309,9 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
     : { player: 'A', bot: 'B' };
   const mkRes = (raceId) => {
     const base = { ...START_RES, popUsed: 0, popMax: 20, morale: 70 };
-    const R = (racesData.races || []).find((r) => r.id === raceId) || {};
+    const R = (racesData?.races || []).find((r) => r.id === raceId) || {};
     for (const [k, v] of Object.entries(R.startBonus || {})) base[k] = (base[k] || 0) + v;
+    for (const [k, v] of Object.entries(cfg.startBonus || {})) base[k] = (base[k] || 0) + v; // бонусы столицы
     return base;
   };
   const state = {
@@ -264,6 +321,10 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
     rules,
     racesData,
     raceOf: races,
+    heroesData: cfg.heroesData,
+    heroStats: {},
+    heroSetup: {},
+    respawns: [],
     mode,
     pids,
     teamMap,
@@ -298,6 +359,7 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
     } : null,
     score: { A: 0, B: 0 },
     stats: Object.fromEntries(pids.map((pid) => [pid, { kills: 0, losses: 0 }])),
+    droppedGear: [], // тиры шмота с лагерей для меты
     lastCombat: null,
     events: [],
     fog: { N: FOG_N, vis: new Uint8Array(FOG_N * FOG_N), exp: new Uint8Array(FOG_N * FOG_N), t: 0 },
@@ -314,12 +376,23 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
     state.players[pid]._bx = px;
     state.players[pid]._bz = pz;
     const layout = baseLayout(px, pz);
-    const R = (racesData.races || []).find((r) => r.id === races[pid]);
+    const R = (racesData?.races || []).find((r) => r.id === races[pid]);
     if (R?.startMarket) layout.push({ type: 'market', x: px + 12, z: pz - 10 });
     for (const slot of layout) addBuilding(state, pid, slot.type, slot.x, slot.z);
     const dz = pid === 'player' || pid === 'ally' ? 8 : -8;
     addSquad(state, pid, 'militia', px - 4, pz + dz);
     addSquad(state, pid, 'swords', px + 4, pz + dz);
+  }
+  // герои: игрок — из меты, боты — воевода 3 ур. (только если переданы heroesData)
+  if (cfg.heroesData) {
+    const pHero = cfg.hero || { arch: 'warlord', level: 1, gear: {} };
+    state.heroSetup.player = pHero;
+    spawnHero(state, 'player', pHero.arch, pHero.level, pHero.gear);
+    for (const pid of pids) {
+      if (pid === 'player') continue;
+      state.heroSetup[pid] = { arch: 'warlord', level: 3, gear: {} };
+      spawnHero(state, pid, 'warlord', 3, {});
+    }
   }
   spawnNeutrals(state);
   recalcPop(state);
@@ -379,7 +452,7 @@ export function recruit(state, pid, buildingId, unitId) {
   if (p.res.popUsed + 1 > p.res.popMax) return false;
   if (!affordable(p.res, u.cost)) return false;
   const cap = squadCap(state, pid);
-  const owned = state.squads.filter((s) => s.owner === pid).length
+  const owned = state.squads.filter((s) => s.owner === pid && s.type !== 'hero').length
     + state.buildings.filter((x) => x.owner === pid).reduce((a, x) => a + x.queue.length, 0);
   if (owned >= cap) return false;
   // лимиты элиты (pacing): тяж.кава 3, требушет 2
@@ -477,7 +550,62 @@ export function upgrade(state, pid, buildingId) {
   event(state, `Улучшается Ратуша до ур.${b.level + 1}`);
   return true;
 }
-// Обмен на рынке: 100 дерева -> ~60 золота, деградация -5% каждые 5 сделок за 2 мин
+// Каст скилла героя (warlord/steward/ranger × Q/E). Возвращает true/false.
+export function castSkill(state, pid, heroId, slot, targetRef = null) {
+  const h = state.squads.find((s) => s.id === heroId && s.owner === pid && s.type === 'hero' && s.count > 0);
+  if (!h) return false;
+  const H = state.heroesData.heroes.find((x) => x.id === h.hero.arch);
+  const sk = H.skills[slot === 'q' ? 0 : 1];
+  if (!sk) return false;
+  const cd = slot === 'q' ? h.hero.qCd : h.hero.eCd;
+  if (cd > 0 || h.hero.mana < sk.mana) return false;
+  const inR = (x, z, r) => Math.hypot(x - h.x, z - h.z) <= r;
+  const ownSquadsIn = (r) => state.squads.filter((s) => s.owner === pid && s.count > 0 && inR(s.x, s.z, r));
+  const ownBuildingsIn = (r) => state.buildings.filter((b) => b.owner === pid && b.hp > 0 && inR(b.x, b.z, r));
+  let ok = false;
+  if (sk.id === 'rush') {
+    for (const s of ownSquadsIn(sk.radius)) s.rushT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'unbreakable') {
+    for (const s of ownSquadsIn(H.base.auraR)) s.unbrT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'convoy') {
+    const p = state.players[pid];
+    p.res.food = Math.min(capOf(state, pid, 'food'), p.res.food + sk.food);
+    for (const b of ownBuildingsIn(sk.radius)) {
+      if (b.type === 'wall' || b.type === 'siege_workshop' || b.type === 'tower') {
+        b.hp = Math.min(b.hpMax, b.hp + sk.repair);
+      }
+    }
+    ok = true;
+  } else if (sk.id === 'fortify') {
+    for (const b of ownBuildingsIn(sk.radius)) {
+      const add = b.hpMax * (sk.shieldMult - 1);
+      b.hp += add;
+      b.shield = (b.shield || 0) + add;
+      b.shieldT = sk.dur;
+    }
+    ok = true;
+  } else if (sk.id === 'ambush') {
+    const t = targetRef ? targetPos(state, targetRef) : null;
+    if (t && t.count !== undefined && t.owner === pid && inR(t.x, t.z, sk.radius)) {
+      t.invisT = sk.dur;
+      ok = true;
+    }
+  } else if (sk.id === 'mark') {
+    const t = targetRef ? targetPos(state, targetRef) : null;
+    if (t && !sameTeam(state, t.owner, pid) && inR(t.x, t.z, sk.radius)) {
+      t.markT = sk.dur;
+      ok = true;
+    }
+  }
+  if (!ok) return false;
+  h.hero.mana -= sk.mana;
+  if (slot === 'q') h.hero.qCd = sk.cd;
+  else h.hero.eCd = sk.cd;
+  event(state, `${H.name}: ${sk.name}!`, 'combat');
+  return true;
+}
 export function tradeRate(state, pid) {
   const p = state.players[pid];
   const now = state.t;
@@ -509,6 +637,7 @@ function nearestEnemy(state, s, range) {
   let bestD = range * range;
   for (const o of state.squads) {
     if (o.owner === s.owner || sameTeam(state, o.owner, s.owner) || o.count <= 0) continue;
+    if (o.invisT > 0) continue; // засада: не видят
     const d = (o.x - s.x) ** 2 + (o.z - s.z) ** 2;
     if (d < bestD) { bestD = d; best = { kind: 'squad', id: o.id }; }
   }
@@ -572,7 +701,7 @@ export const WALL_HP = 900 * WALL_SEG_M;
 export const WALL_COST = 120;
 export const WALL_MAX = 30;
 export function wallHpOf(state, pid) {
-  const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]) || {};
+  const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[pid]) || {};
   return Math.round(WALL_HP * (R.wallHpMult || 1));
 }
 // Отталкивание от стен (стенам нет ворот в 0.3 — стройте с проходами)
@@ -610,16 +739,31 @@ function siegeBonus(state, s) {
   const guild = state.buildings.some((b) => b.owner === s.owner && b.type === 'guild_league' && b.hp > 0 && b.buildT <= 0);
   return league && guild ? { dmg: 1.2, range: m(5) } : { dmg: 1, range: 0 };
 }
-// Эффективная мораль: база + аура храма/холла (+10 рядом) + запах хлеба (+5 при рабочей пекарне)
+// Эффективная мораль: база + аура храма/холла/воеводы (+10 рядом) + запах хлеба
 export function effMor(state, s) {
   let m = s.mor;
   if (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA)) m += 10;
   if (nearOwn(state, s.owner, 'hall_nord', s.x, s.z, 7.5)) m += 10;
+  const wh = heroOf(state, s.owner);
+  if (wh && wh.hero.arch === 'warlord' && wh.id !== s.id
+    && Math.hypot(s.x - wh.x, s.z - wh.z) <= 5.5) m += 10;
+  if (s.type === 'hero' && s.hero) m += s.hero.gearMorale || 0;
   if (state.players[s.owner]?.townMor) m += state.players[s.owner].townMor;
   return m;
 }
 export function sightOf(state, b) {
-  if (b.count !== undefined) return SIGHT.squad; // отряд
+  if (b.count !== undefined) {
+    let sg = SIGHT.squad;
+    if (b.type === 'hero') {
+      const hd = defOf(state, 'hero', b.owner);
+      sg = hd?.sight || sg;
+    }
+    // аура следопыта: +30% обзор своим рядом
+    const rh = heroOf(state, b.owner);
+    if (rh && rh.hero.arch === 'ranger' && rh.id !== b.id
+      && Math.hypot(b.x - rh.x, b.z - rh.z) <= 5.5) sg *= 1.3;
+    return sg;
+  }
   if (b.type === 'tower') return SIGHT.tower;
   if (b.type === 'townhall') return SIGHT.townhall;
   return SIGHT.building;
@@ -631,15 +775,28 @@ function dealDamage(state, src, target, mult = 1) {
   // src: {type} для отрядов (урон из data) или {dmg} для башен
   const def = src.type && src.type !== '__tower' ? defOf(state, src.type, src.owner) : null;
   const baseDmg = def ? def.dmg : src.dmg || 10;
+  const srcRanged = !def ? true : (def.range || 0) > 0;
   let dmg = baseDmg * mult;
   if (def && e.type && CAV_IDS.has(e.type) && def.bonusVsCav) dmg *= def.bonusVsCav;
   if (def && e.count !== undefined) {
     // пробитие по тяжелой броне (xbows 1.5, halberdiers 2.0)
     const eDef = defOf(state, e.type, e.owner);
     if (def.bonusVsHeavy && eDef.armor === 'heavy') dmg *= def.bonusVsHeavy;
+    // резисты к стрелам (combat-v02 EHP): medium 0.85, heavy 0.7
+    if (srcRanged && eDef.armor === 'medium') dmg *= 0.85;
+    if (srcRanged && eDef.armor === 'heavy') dmg *= 0.7;
   }
+  // метка следопыта: x1.3
+  if (e.markT > 0) dmg *= 1.3;
   const fm = e.count !== undefined ? flankMultOf(state, src, e) : 1;
   dmg *= fm;
+  // аура воеводы: +5% урона ближним рядом
+  if (def && (def.range || 0) === 0 && e.count !== undefined) {
+    const wh = heroOf(state, src.owner);
+    if (wh && wh.hero.arch === 'warlord' && Math.hypot(src.x - wh.x, src.z - wh.z) <= 5.5) dmg *= 1.05;
+  }
+  // атака снимает засаду
+  if (src.invisT) src.invisT = 0;
   if (onHill(state, src.x, src.z)) dmg *= 1 + (state.rules.heightBonus ?? 0.15);
   if (e.hp !== undefined && e.count !== undefined) {
     // отряд: урон в общий пул HP
@@ -684,6 +841,13 @@ function onSquadWiped(state, src, e) {
     state.stats[killer].kills += bodies;
     const ks = state.squads.find((x) => x.id === src.id);
     if (ks) ks.kills += bodies;
+    // опыт герою-убийце в радиусе 30м (следопыт +20% с лагерей)
+    const h = heroOf(state, killer);
+    if (h && Math.hypot(h.x - e.x, h.z - e.z) <= 7.5) {
+      let xp = xpForVictim(state, e);
+      if (e.owner === 'neutral' && h.hero.arch === 'ranger') xp = Math.round(xp * 1.2);
+      awardXp(state, killer, xp);
+    }
   }
   if (state.stats[e.owner]) state.stats[e.owner].losses += bodies;
   state.lastCombat = { x: e.x, z: e.z, t: state.t };
@@ -691,7 +855,7 @@ function onSquadWiped(state, src, e) {
     const nd = NEUTRAL_DEFS[e.type];
     if (nd && killer) {
       const p = state.players[killer];
-      const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[killer]);
+      const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[killer]);
       const loot = R?.lootMult || 1; // каганат: грабеж +30%
       const parts = [];
       for (const [k, v] of Object.entries(nd.reward)) {
@@ -700,9 +864,19 @@ function onSquadWiped(state, src, e) {
         parts.push(`+${amt} ${k === 'food' ? 'еды' : 'золота'}`);
       }
       if (killer === 'player') event(state, `Лагерь зачищен (${nd.name}): ${parts.join(', ')}`, 'flag');
+      // шмот с бандитов: серый всегда, синий 20% (loot фиксируется в s.droppedGear)
+      if (e.type === 'bandits' && killer === 'player') {
+        e.droppedGear = state.rng() < 0.2 ? 'blue' : 'gray';
+        state.droppedGear.push(e.droppedGear);
+      }
     }
   } else {
     event(state, `Отряд ${defOf(state, e.type, e.owner).name} (${e.owner}) уничтожен`, 'combat');
+  }
+  // смерть героя: респаун 30 сек у Ратуши, уровень сохраняется
+  if (e.type === 'hero') {
+    state.respawns.push({ pid: e.owner, t: state.heroesData?.respawnSec ?? 30 });
+    event(state, `Герой ${e.owner === 'player' ? 'пал! Респаун 30 сек.' : 'врага повержен! +200 XP'}`, 'combat');
   }
 }
 
@@ -710,6 +884,17 @@ function updateSquad(state, s, dt) {
   if (s.count <= 0) return;
   const def = defOf(state, s.type, s.owner);
   s.atkCd -= dt;
+  // тики баффов/меток/засады
+  if (s.rushT > 0) s.rushT -= dt;
+  if (s.unbrT > 0) s.unbrT -= dt;
+  if (s.invisT > 0) s.invisT -= dt;
+  if (s.markT > 0) s.markT -= dt;
+  // герой: мана и кулдауны
+  if (s.hero) {
+    s.hero.mana = Math.min(def.manaMax, s.hero.mana + 2 * dt);
+    s.hero.qCd = Math.max(0, s.hero.qCd - dt);
+    s.hero.eCd = Math.max(0, s.hero.eCd - dt);
+  }
   const neutral = s.owner === 'neutral';
 
   // --- нейтралы: сидят у лагеря, агрятся, дальше leash не уходят, дома регенят ---
@@ -760,7 +945,7 @@ function updateSquad(state, s, dt) {
     return;
   }
 
-  // --- бегство (порог по эффективной морали) ---
+  // --- бегство (порог по эффективной морали; несгибаемые игнорят) ---
   if (s.fleeT > 0) {
     s.fleeT -= dt;
     const threat = nearestEnemy(state, s, AGGRO_RADIUS * 2);
@@ -777,7 +962,7 @@ function updateSquad(state, s, dt) {
     }
     return;
   }
-  if (effMor(state, s) < (state.rules.moraleFlee ?? 30)) {
+  if (effMor(state, s) < (state.rules.moraleFlee ?? 30) && !s.unbrT) {
     s.fleeT = state.rules.fleeSec ?? 8;
     s.mor = 45;
     event(state, `Отряд ${def.name} бежит!`, 'combat');
@@ -871,9 +1056,10 @@ function updateSquad(state, s, dt) {
     const d = Math.hypot(moveX - s.x, moveZ - s.z) || 1;
     s.face = Math.atan2(moveX - s.x, moveZ - s.z);
     let speed = def.speed;
+    if (s.rushT > 0) speed *= 1.3; // рывок воеводы
     // каганат +15% каве; табун +10% каве рядом
     if (CAV_IDS.has(s.type)) {
-      const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[s.owner]) || {};
+      const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[s.owner]) || {};
       speed *= R.cavSpeedMult || 1;
       if (nearOwn(state, s.owner, 'tabun_kaganat', s.x, s.z, 6.25)) speed *= 1.1;
     }
@@ -906,7 +1092,7 @@ export function capOf(state, pid, res) {
 function updateEconomy(state, dt) {
   for (const pid of state.pids) {
     const p = state.players[pid];
-    const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]) || {};
+    const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[pid]) || {};
     const econMult = p.bot ? state.diff.econ : 1; // сложность двигает только ботов
     const goldMult = R.goldMult || 1; // лига +15% золота
     const prod = { food: 0, wood: 0, stone: 0, iron: 0, gold: 0 };
@@ -999,11 +1185,14 @@ function updateQueues(state, dt) {
     }
     const q = b.queue[0];
     if (!q) continue;
-    // голод: найм -30% скорости; норд: казармы +20%
-    const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[b.owner]) || {};
+    // голод: найм -30% скорости; норд: казармы +20%; наместник: стройка +15% рядом
+    const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[b.owner]) || {};
     const slow = state.players[b.owner]?.starving ? 0.7 : 1;
     const fast = b.type === 'barracks' && R.barracksSpeed ? R.barracksSpeed : 1;
-    q.t -= dt * slow * fast;
+    const stw = heroOf(state, b.owner);
+    const stewardAura = stw && stw.hero.arch === 'steward'
+      && Math.hypot(b.x - stw.x, b.z - stw.z) <= 5.5 ? 1.15 : 1;
+    q.t -= dt * slow * fast * stewardAura;
     if (q.t <= 0) {
       b.queue.shift();
       addSquad(state, b.owner, q.unitId, b.rally.x, b.rally.z);
@@ -1024,6 +1213,7 @@ function updateTowers(state, dt) {
     let bestD = range * range;
     for (const s of state.squads) {
       if (s.count <= 0 || sameTeam(state, s.owner, b.owner)) continue;
+      if (s.invisT > 0 && Math.hypot(s.x - b.x, s.z - b.z) > 5) continue; // башни видят засаду в 20м
       const d = (s.x - b.x) ** 2 + (s.z - b.z) ** 2;
       if (d < bestD) { bestD = d; best = s; }
     }
@@ -1053,6 +1243,9 @@ function updateFlags(state, dt) {
         f.owner = 'A';
         f.progress = 0;
         event(state, `Флаг ${f.id} захвачен!`, 'flag');
+        for (const s of state.squads) {
+          if (s.type === 'hero' && s.count > 0 && teamOf(state, s.owner) === 'A') s.hero.xpBattle += 150;
+        }
       }
     } else if (nB >= CAPTURE_MIN_SOLDIERS && nA < CAPTURE_MIN_SOLDIERS && f.owner !== 'B') {
       f.progress += dt * (nB / 10) / (f.capSec / CAPTURE_TUNING);
@@ -1176,7 +1369,7 @@ function updateBot(state, dt) {
     }
     // атака: союзник держится до 3 отрядов, остальные идут от aggro
     const need = p.defensive ? 3 : state.diff.aggro;
-    const army = state.squads.filter((s) => s.owner === pid && s.count > 0 && !s.order);
+    const army = state.squads.filter((s) => s.owner === pid && s.count > 0 && !s.order && s.type !== 'hero');
     if (army.length >= need) {
       const myTeam = teamOf(state, pid);
       const free = state.flags.find((f) => f.owner !== myTeam);
@@ -1184,6 +1377,12 @@ function updateBot(state, dt) {
       const dest = (army.length >= need + 2 && foeTH) ? foeTH : free || foeTH;
       if (dest) {
         for (const s of army) s.order = { kind: 'attackmove', x: dest.x, z: dest.z, target: null };
+        // герой идёт с армией и жмёт рывок
+        const hh = heroOf(state, pid);
+        if (hh) {
+          hh.order = { kind: 'attackmove', x: dest.x, z: dest.z, target: null };
+          if (hh.hero.arch === 'warlord') castSkill(state, pid, hh.id, 'q');
+        }
         if (myTeam === 'B' && pid === state.pids.find((q) => state.players[q].bot && teamOf(state, q) === 'B')) {
           event(state, 'Враг наступает!', 'combat');
         }
@@ -1210,6 +1409,23 @@ export function update(state, dt) {
     state.fog.t = 0;
     updateFog(state);
   }
+  // респаун героев 30 сек у Ратуши
+  for (let i = state.respawns.length - 1; i >= 0; i--) {
+    const rp = state.respawns[i];
+    rp.t -= dt;
+    if (rp.t <= 0) {
+      state.respawns.splice(i, 1);
+      const setup = state.heroSetup[rp.pid];
+      const th = state.buildings.find((b) => b.owner === rp.pid && b.type === 'townhall' && b.hp > 0);
+      if (setup && th) {
+        const s = spawnHero(state, rp.pid, setup.arch, setup.level, setup.gear);
+        s.x = th.x + 4;
+        s.z = th.z + 8;
+        recalcPop(state);
+        if (rp.pid === 'player') event(state, 'Герой вернулся в строй!', 'flag');
+      }
+    }
+  }
   // условия победы — по командам
   const winScore = state.map.winScore || 1000;
   const aliveTH = (team) => state.buildings.some((b) => b.type === 'townhall' && b.hp > 0 && teamOf(state, b.owner) === team);
@@ -1222,8 +1438,16 @@ export function update(state, dt) {
     state.winner = 'B';
     state.reason = !aliveTH('A') ? 'Ваша Ратуша разрушена' : 'Враг набрал 1000 очков';
   }
-  // разрушенные здания убираем из списков (оставляем руины рендеру через hp<=0)
+  // разрушенные здания, спад щитов/меток, респаун героев
   for (const b of state.buildings) {
+    if (b.shieldT > 0) {
+      b.shieldT -= dt;
+      if (b.shieldT <= 0) {
+        b.hp = Math.min(b.hp, b.hpMax);
+        b.shield = 0;
+      }
+    }
+    if (b.markT > 0) b.markT -= dt;
     if (b.hp <= 0 && !b.ruined) {
       b.ruined = true;
       const def = buildingById(state.bdefs, b.type);

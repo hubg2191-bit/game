@@ -1,5 +1,6 @@
 // client/ui — HUD 0.1: ресурсы, панель выбора, найм, стройка, миникарта, оверлеи.
-import { affordable, recruitTime, buildTime, squadCap, capOf, tradeRate, upgrade, trade, recruitable, buildMenuFor, MVP_BUILD_MENU, unitById, buildingById, isVisible, teamOf, WORLD_SCALE } from './sim.js';
+import { affordable, recruitTime, buildTime, squadCap, capOf, tradeRate, upgrade, trade, recruitable, buildMenuFor, MVP_BUILD_MENU, unitById, buildingById, defOf, isVisible, teamOf, WORLD_SCALE } from './sim.js';
+import { xpNext } from './meta.js';
 
 function costText(cost) {
   const names = { food: '🍞', wood: '🪵', stone: '🪨', iron: '⛓️', gold: '🪙' };
@@ -35,6 +36,87 @@ export class GameUI {
     this.minimap = root.querySelector('#minimap');
     this.mm = this.minimap.getContext('2d');
     this.buildMode = null;
+  }
+
+  showMeta(meta, ctx, cb) {
+    let tab = 'capital';
+    const gearText = (it) => `${it.tier === 'blue' ? '🔵' : '⚪'} ${it.slot}: ` +
+      Object.entries(it.stats).map(([k, v]) => `${k}+${v}`).join(' ');
+    const draw = () => {
+      const h = meta.hero;
+      const H = ctx.heroesData.heroes.find((x) => x.id === h.arch);
+      const need = xpNext(h.level);
+      let body = '';
+      if (tab === 'capital') {
+        const cost = [0, 500, 1500][meta.capital.thLevel] || 0;
+        body = `
+          <p>Ратуша ур.${meta.capital.thLevel} • Казна: <b>${Math.floor(meta.capital.gold)}🪙</b></p>
+          ${ctx.offline && ctx.offline.gold > 0 ? `<p class="good">Пока вас не было (${Math.floor(ctx.offline.secs / 60)} мин): +${ctx.offline.gold}🪙 (40%, кап 8ч)</p>` : ''}
+          <p class="dim">Уровень столицы: +100🪙 и +50🍞 к старту схватки за уровень.</p>
+          ${meta.capital.thLevel < 3
+            ? `<button id="mUpTh" ${meta.capital.gold >= cost ? '' : 'disabled'}>Улучшить Ратушу (${cost}🪙)</button>`
+            : '<p>Максимальный уровень</p>'}`;
+      } else if (tab === 'hero') {
+        const eq = h.gear || {};
+        body = `
+          <div class="lrow"><span>Герой:</span>${ctx.heroesData.heroes.map((x) => `<button data-arch="${x.id}" class="${h.arch === x.id ? 'active' : ''}">${x.name}</button>`).join('')}</div>
+          <p><b>${H.name}</b> · ур.${h.level} • XP ${h.xp}/${need} • СИЛ/ХОЗ/ДУХ ${H.stats.str}/${H.stats.adm}/${H.stats.spi}</p>
+          <p class="dim">Аура: ${H.aura.morale ? `+${H.aura.morale} морали` : ''}${H.aura.build ? ` стройка +${Math.round((H.aura.build - 1) * 100)}%` : ''}${H.aura.vision ? ` обзор +${Math.round((H.aura.vision - 1) * 100)}%` : ''} • Q: ${H.skills[0].name} • E: ${H.skills[1].name}</p>
+          <p>Снаряжение:</p>
+          ${ctx.heroesData.gearSlots.map((slot) => {
+            const it = eq[slot];
+            return `<div class="lrow"><span>${slot}:</span>${it ? `<button data-unequip="${slot}">${gearText(it)} [снять]</button>` : '<i class="dim">пусто</i>'}</div>`;
+          }).join('')}
+          <p>Рюкзак (${(h.inventory || []).length}):</p>
+          ${(h.inventory || []).map((it) => `<div class="lrow"><button data-equip="${it.id}">${gearText(it)}</button></div>`).join('') || '<p class="dim">Пусто. Шмот падает с лагерей бандитов.</p>'}`;
+      } else if (tab === 'clan') {
+        body = `
+          <div class="lrow"><span>Клан:</span><input id="clanName" value="${meta.clan.name || ''}" placeholder="Название клана" maxlength="24"/></div>
+          <p>Казна клана: <b>${Math.floor(meta.clan.vault)}🪙</b> <span class="dim">(10% с наград боёв)</span></p>
+          <button id="mVault">Забрать в казну столицы</button>
+          <p class="dim">Союзники-боты в 2v2 — члены вашего клана.</p>`;
+      } else {
+        body = `
+          <p>День сезона: <b>${meta.season.day}/90</b> • Боёв сегодня: ${meta.season.battlesToday}/3 (дальше награды 20%)</p>
+          <p class="dim">Вайп: столица жмётся до ур.1, герои/шмот/золото/MMR остаются.</p>
+          <button id="mWipe">Ручной вайп сезона</button>`;
+      }
+      this.overlay.innerHTML = `
+      <div class="card lobby">
+        <h1>Thrones & Towns <span>столица</span></h1>
+        <div class="lrow"><span></span>
+          ${['capital', 'hero', 'clan', 'season'].map((t) => `<button data-tab="${t}" class="${tab === t ? 'active' : ''}">${{ capital: 'Столица', hero: 'Герой', clan: 'Клан', season: 'Сезон' }[t]}</button>`).join('')}
+        </div>
+        ${body}
+        <button id="mPlay">В бой →</button>
+      </div>`;
+      this.overlay.classList.remove('hidden');
+      this.overlay.querySelectorAll('[data-tab]').forEach((b) => {
+        b.onclick = () => { tab = b.dataset.tab; draw(); };
+      });
+      this.overlay.querySelectorAll('[data-arch]').forEach((b) => {
+        b.onclick = () => { cb.onArch(b.dataset.arch); draw(); };
+      });
+      this.overlay.querySelectorAll('[data-equip]').forEach((b) => {
+        b.onclick = () => { cb.onEquip(b.dataset.equip); draw(); };
+      });
+      this.overlay.querySelectorAll('[data-unequip]').forEach((b) => {
+        b.onclick = () => { cb.onUnequip(b.dataset.unequip); draw(); };
+      });
+      const up = this.overlay.querySelector('#mUpTh');
+      if (up) up.onclick = () => { cb.onCapitalUp(); draw(); };
+      const wv = this.overlay.querySelector('#mVault');
+      if (wv) wv.onclick = () => { cb.onVault(); draw(); };
+      const wp = this.overlay.querySelector('#mWipe');
+      if (wp) wp.onclick = () => { if (confirm('Вайпнуть сезон? Столица ужмётся.')) { cb.onWipe(); draw(); } };
+      const cn = this.overlay.querySelector('#clanName');
+      if (cn) cn.onchange = () => cb.onClanName(cn.value);
+      this.overlay.querySelector('#mPlay').onclick = () => {
+        this.overlay.classList.add('hidden');
+        cb.onPlay();
+      };
+    };
+    draw();
   }
 
   showLobby(lobby, onStart) {
@@ -108,6 +190,7 @@ export class GameUI {
         <h1>${win ? 'Победа!' : 'Поражение'}</h1>
         <p>${reason}</p>
         <p>Счёт ${Math.floor(score.A)} : ${Math.floor(score.B)}${extra.mmr != null ? ` • MMR ${extra.mmr}` : ''}</p>
+        ${extra.rewardText ? `<p class="good">${extra.rewardText}</p>` : ''}
         <p class="dim">Фраги ${st.kills} : ${foe.kills} • Потери ${st.losses}${mvp ? ` • MVP-отряд: ${mvpName} (${mvp.kills} убийств)` : ''}</p>
         <button id="againBtn">Ещё раз</button>
         ${extra.onReplay ? '<button id="replayBtn">Смотреть реплей</button>' : ''}
@@ -130,7 +213,7 @@ export class GameUI {
       <span title="Железо">⛓️ ${Math.floor(r.iron)}</span>
       <span title="Золото">🪙 ${Math.floor(r.gold)}</span>
       <span title="Население">👥 ${r.popUsed}/${r.popMax}</span>
-      <span title="Лимит отрядов">⚔️ ${state.squads.filter((s) => s.owner === 'player').length}/${squadCap(state, 'player')}</span>${hunger}`;
+      <span title="Лимит отрядов (герой не в счёт)">⚔️ ${state.squads.filter((s) => s.owner === 'player' && s.type !== 'hero').length}/${squadCap(state, 'player')}</span>${hunger}`;
     // полоса счёта по hud-battle.md: флаги, доход, прогноз
     const win = state.map.winScore || 1000;
     const flA = state.flags.filter((f) => f.owner === 'A').length;
@@ -210,8 +293,9 @@ export class GameUI {
         `<h3>Отряды: ${list.length}</h3>` +
         list
           .map((s) => {
-            const u = unitById(state.units, s.type);
-            return `<div>${u.name} — ${s.count}/${u.size} • HP ${Math.ceil(s.hp)}/${s.hpMax} • мораль ${Math.ceil(s.mor)}${s.fleeT > 0 ? ' 🏃 БЕЖИТ' : ''}</div>`;
+            const u = defOf(state, s.type, s.owner) || { name: s.type, size: '?', hpPer: 1 };
+            const mor = s.type === 'hero' && s.hero ? ` • мана ${Math.floor(s.hero.mana)}` : ` • мораль ${Math.ceil(s.mor)}`;
+            return `<div>${u.name} — ${s.count}/${u.size} • HP ${Math.ceil(s.hp)}/${s.hpMax}${mor}${s.fleeT > 0 ? ' 🏃 БЕЖИТ' : ''}${(s.invisT || 0) > 0 ? ' 👻' : ''}</div>`;
           })
           .join('') +
         `<button id="stopBtn">Стоп</button>`;
@@ -234,6 +318,39 @@ export class GameUI {
       }).join('');
     this.buildmenu.querySelectorAll('[data-build]').forEach((btn) => {
       btn.onclick = () => this.cb.onBuild(btn.dataset.build);
+    });
+  }
+
+  // Панель героя: уровень, мана, Q/E (вызывается из main каждый кадр)
+  heroPanel(state, heroesData) {
+    let el = this.root.querySelector('#heropanel');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'heropanel';
+      this.root.appendChild(el);
+    }
+    const h = state.squads.find((s) => s.owner === 'player' && s.type === 'hero');
+    if (!h) {
+      const rp = (state.respawns || []).find((r) => r.pid === 'player');
+      el.innerHTML = rp ? `<div class="hname">Герой возродится через ${Math.ceil(rp.t)}с</div>` : '';
+      el.style.display = rp ? 'block' : 'none';
+      return;
+    }
+    const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
+    const q = H.skills[0];
+    const eSk = H.skills[1];
+    const qRdy = h.hero.qCd <= 0 && h.hero.mana >= q.mana;
+    const eRdy = h.hero.eCd <= 0 && h.hero.mana >= eSk.mana;
+    const need = xpNext(h.hero.level);
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="hname">${H.name} · ур.${h.hero.level}</div>
+      <div class="hbar xp"><div style="width:${Math.min(100, (h.hero.xpBattle / need) * 100)}%"></div></div>
+      <div class="hbar mana"><div style="width:${(h.hero.mana / defOf(state, 'hero', 'player').manaMax) * 100}%"></div></div>
+      <button data-skill="q" class="${this.pendingSkill === 'q' ? 'armed' : ''}" ${qRdy || this.pendingSkill === 'q' ? '' : 'disabled'} title="${q.name}: ${h.hero.qCd > 0 ? Math.ceil(h.hero.qCd) + 'с' : q.mana + ' маны'}">Q ${q.name}</button>
+      <button data-skill="e" class="${this.pendingSkill === 'e' ? 'armed' : ''}" ${eRdy || this.pendingSkill === 'e' ? '' : 'disabled'} title="${eSk.name}: ${h.hero.eCd > 0 ? Math.ceil(h.hero.eCd) + 'с' : eSk.mana + ' маны'}">E ${eSk.name}</button>`;
+    el.querySelectorAll('[data-skill]').forEach((btn) => {
+      btn.onclick = () => this.cb.onSkill(btn.dataset.skill);
     });
   }
 

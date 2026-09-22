@@ -2,15 +2,17 @@
 import './style.css';
 import * as THREE from 'three';
 import {
-  createGame, update, orderMove, orderAttack, recruit, construct, upgrade, trade,
-  SIM_TICK_HZ, WORLD_SCALE, DIFFS, teamOf, defOf,
+  createGame, update, orderMove, orderAttack, recruit, construct, upgrade, trade, castSkill,
+  SIM_TICK_HZ, WORLD_SCALE, DIFFS, teamOf, defOf, heroOf,
 } from './game/sim.js';
 import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
+import { loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear, xpNext } from './game/meta.js';
 import unitsData from './game/data/units.json';
 import buildingsData from './game/data/buildings.json';
 import palette from './game/data/palette.json';
 import racesData from './game/data/races.json';
+import heroesData from './game/data/heroes.json';
 import mapPlain from './game/data/maps/skirmish-plain.json';
 import mapRiver from './game/data/maps/skirmish-river.json';
 
@@ -38,14 +40,18 @@ function ndcOf(e, renderer) {
   return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
 }
 
-function startMatch(lobbyCfg, replayRec = null) {
+function startMatch(lobbyCfg, replayRec = null, meta = null) {
   sceneEl.innerHTML = '';
   const map = MAPS.find((m) => m.id === lobbyCfg.map) || MAPS[0];
+  const capLv = meta?.capital.thLevel || 1;
   const cfg = {
     mode: map.mode,
     races: { player: lobbyCfg.race },
     difficulty: lobbyCfg.difficulty,
     seed: replayRec ? replayRec.seed : Math.floor(Math.random() * 1e9),
+    heroesData,
+    hero: replayRec?.hero || { arch: meta?.hero.arch || 'warlord', level: meta?.hero.level || 1, gear: meta?.hero.gear || {} },
+    startBonus: { gold: 100 * (capLv - 1), food: 50 * (capLv - 1) }, // бонусы столицы
   };
   // ботам — случайные другие расы (детерминировано из сида)
   const raceIds = racesData.races.map((r) => r.id).filter((r) => r !== cfg.races.player);
@@ -65,9 +71,12 @@ function startMatch(lobbyCfg, replayRec = null) {
   let attackMode = false;
   let started = !replayRec;
   const isReplay = !!replayRec;
-  const rec = replayRec || { seed: cfg.seed, cfg: lobbyCfg, orders: [] };
+  const rec = replayRec || { seed: cfg.seed, cfg: lobbyCfg, hero: cfg.hero, orders: [] };
   let replayIdx = 0;
+  let pendingSkill = null; // 'q' | 'e' для прицельных скиллов (засада/метка)
+  ui.pendingSkill = null;
 
+  const heroAlive = () => state.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
   const record = (fn, args) => {
     if (isReplay || !started || state.over) return;
     rec.orders.push({ tick: state.tick, fn, args });
@@ -94,6 +103,27 @@ function startMatch(lobbyCfg, replayRec = null) {
       for (const s of state.squads) {
         if (sel.squads.includes(s.id)) s.order = { kind: 'move', x: s.x, z: s.z };
       }
+    },
+    onSkill: (slot) => {
+      if (isReplay || !started) return;
+      const h = heroAlive();
+      if (!h) return;
+      const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
+      const sk = H.skills[slot === 'q' ? 0 : 1];
+      if (pendingSkill === slot) {
+        pendingSkill = null;
+        ui.pendingSkill = null;
+        return;
+      }
+      if (sk.id === 'ambush' || sk.id === 'mark') {
+        // прицельные: следующий клик — цель
+        if (h.hero[slot === 'q' ? 'qCd' : 'eCd'] <= 0 && h.hero.mana >= sk.mana) {
+          pendingSkill = slot;
+          ui.pendingSkill = slot;
+        }
+        return;
+      }
+      if (castSkill(state, 'player', h.id, slot)) record('skill', ['player', h.id, slot, null]);
     },
   });
 
@@ -176,7 +206,15 @@ function startMatch(lobbyCfg, replayRec = null) {
     } else {
       const pt = render.groundPoint(ndcOf(e, render.renderer));
       const ent = render.pick(ndcOf(e, render.renderer));
-      if (attackMode && pt && sel.squads.length) {
+      if (pendingSkill && ent) {
+        // прицельный скилл героя
+        const h = heroAlive();
+        if (h && castSkill(state, 'player', h.id, pendingSkill, ent)) {
+          record('skill', ['player', h.id, pendingSkill, ent]);
+        }
+        pendingSkill = null;
+        ui.pendingSkill = null;
+      } else if (attackMode && pt && sel.squads.length) {
         if (ent && (ent.kind === 'squad' || ent.kind === 'building')) {
           const target = ent.kind === 'squad'
             ? state.squads.find((s) => s.id === ent.id)
@@ -250,6 +288,8 @@ function startMatch(lobbyCfg, replayRec = null) {
       buildMode = null;
       ui.buildMode = null;
       attackMode = false;
+      pendingSkill = null;
+      ui.pendingSkill = null;
     }
     if (!started || state.over) return;
     if (e.code === 'KeyA') attackMode = true;
@@ -326,10 +366,49 @@ function startMatch(lobbyCfg, replayRec = null) {
     construct: (a) => construct(state, a[0], a[1], a[2], a[3]),
     upgrade: (a) => upgrade(state, a[0], a[1]),
     trade: (a) => trade(state, a[0]),
+    skill: (a) => {
+      // id героя может смениться после респауна — ищем живого героя владельца
+      const h = state.squads.find((s) => s.owner === a[0] && s.type === 'hero' && s.count > 0);
+      if (h) castSkill(state, a[0], h.id, a[2], a[3]);
+    },
     loose: (a) => {
       for (const s of state.squads) if (a[0].includes(s.id)) s.loose = !s.loose;
     },
   };
+
+  // финиш матча: MMR, награды в мету, шмот, реплей
+  let finished = false;
+  function finishMatch() {
+    if (finished) return;
+    finished = true;
+    const win = state.winner === 'A';
+    mmr = Math.max(100, Math.min(3000, mmr + (win ? 25 : -20)));
+    localStorage.setItem('tt_mmr', String(mmr));
+    let rewardText = '';
+    if (meta && !isReplay) {
+      const heroSq = state.squads.find((s) => s.owner === 'player' && s.type === 'hero');
+      const xp = heroSq?.hero.xpBattle || 0;
+      const rw = applyBattleResult(meta, { win, xp, goldEarned: 0, maxLevel: heroesData.maxLevel });
+      for (const tier of state.droppedGear) {
+        const item = rollGear(Math.random, tier);
+        meta.hero.inventory.push(item);
+      }
+      saveMeta(meta);
+      rewardText = `Награды: +${rw.gold}🪙 +${rw.xp + xp} XP${rw.capped ? ' (дейли-кап!)' : ''}${state.droppedGear.length ? ` • Шмот: ${state.droppedGear.length} шт.` : ''}`;
+    }
+    try {
+      localStorage.setItem('tt_last_replay', JSON.stringify(rec));
+    } catch { /* переполнение — не критично */ }
+    ui.showEnd(state.winner, state.reason, state.score, state.stats, state.squads, {
+      state, unitName, mmr, rewardText,
+      onReplay: isReplay ? null : () => {
+        cancelAnimationFrame(raf);
+        removeEventListener('keydown', onKey);
+        removeEventListener('keyup', onKeyUp);
+        startMatch(rec.cfg, JSON.parse(localStorage.getItem('tt_last_replay')), meta);
+      },
+    });
+  }
 
   let acc = 0;
   let last = performance.now();
@@ -358,28 +437,17 @@ function startMatch(lobbyCfg, replayRec = null) {
       panCamera(dt);
       render.sync(state, { squads: [], building: null }, dt);
       ui.update(state, { squads: [], building: null });
+      ui.heroPanel(state, heroesData);
       ui.refreshReplayBar();
-      if (state.over) replay.playing = false;
+      if (state.over) {
+        replay.playing = false;
+        finishMatch();
+      }
       return;
     }
     if (!started || state.over) {
       render.sync(state, sel, dt);
-      if (started && state.over) {
-        mmr = Math.max(100, Math.min(3000, mmr + (state.winner === 'A' ? 25 : -20)));
-        localStorage.setItem('tt_mmr', String(mmr));
-        try {
-          localStorage.setItem('tt_last_replay', JSON.stringify(rec));
-        } catch { /* переполнение — не критично */ }
-        ui.showEnd(state.winner, state.reason, state.score, state.stats, state.squads, {
-          state, unitName, mmr,
-          onReplay: () => {
-            cancelAnimationFrame(raf);
-            removeEventListener('keydown', onKey);
-            removeEventListener('keyup', onKeyUp);
-            startMatch(rec.cfg, JSON.parse(localStorage.getItem('tt_last_replay')));
-          },
-        });
-      }
+      if (started && state.over) finishMatch();
       return;
     }
     acc += dt;
@@ -393,22 +461,8 @@ function startMatch(lobbyCfg, replayRec = null) {
     panCamera(dt);
     render.sync(state, sel, dt);
     ui.update(state, sel);
-    if (state.over) {
-      mmr = Math.max(100, Math.min(3000, mmr + (state.winner === 'A' ? 25 : -20)));
-      localStorage.setItem('tt_mmr', String(mmr));
-      try {
-        localStorage.setItem('tt_last_replay', JSON.stringify(rec));
-      } catch { /* ignore */ }
-      ui.showEnd(state.winner, state.reason, state.score, state.stats, state.squads, {
-        state, unitName, mmr,
-        onReplay: () => {
-          cancelAnimationFrame(raf);
-          removeEventListener('keydown', onKey);
-          removeEventListener('keyup', onKeyUp);
-          startMatch(rec.cfg, JSON.parse(localStorage.getItem('tt_last_replay')));
-        },
-      });
-    }
+    ui.heroPanel(state, heroesData);
+    if (state.over) finishMatch();
   }
 
   addEventListener('resize', () => render.resize());
@@ -417,24 +471,69 @@ function startMatch(lobbyCfg, replayRec = null) {
     ui.showReplayBar(replay, () => location.reload());
   } else {
     ui.update(state, sel);
+    ui.heroPanel(state, heroesData);
   }
   requestAnimationFrame(frame);
 }
 
-// --- вход: лобби ---
+// --- вход: мета (столица/герой/клан/сезон) -> лобби -> бой ---
+const meta = loadMeta();
+const offline = offlineEarnings(meta);
+if (offline.gold > 0) {
+  meta.capital.gold += offline.gold;
+  saveMeta(meta);
+}
 const bootUI = new GameUI(app.querySelector('#hud'), {
   onRecruit: () => {},
   onUpgrade: () => {},
   onTrade: () => {},
   onBuild: () => {},
   onStop: () => {},
+  onSkill: () => {},
 });
-bootUI.showLobby(
-  {
-    maps: MAPS.map((m) => ({ id: m.id, name: m.name })),
-    races: racesData.races,
-    diffs: Object.entries(DIFFS).map(([id, d]) => ({ id, label: d.label })),
-    mmr,
+function openLobby() {
+  bootUI.showLobby(
+    {
+      maps: MAPS.map((m) => ({ id: m.id, name: m.name })),
+      races: racesData.races,
+      diffs: Object.entries(DIFFS).map(([id, d]) => ({ id, label: d.label })),
+      mmr,
+    },
+    (cfg) => startMatch(cfg, null, meta)
+  );
+}
+bootUI.showMeta(meta, { heroesData, racesData, offline }, {
+  onArch: (arch) => { meta.hero.arch = arch; saveMeta(meta); },
+  onEquip: (id) => {
+    const ix = (meta.hero.inventory || []).findIndex((it) => it.id === id);
+    if (ix < 0) return;
+    const [item] = meta.hero.inventory.splice(ix, 1);
+    const old = meta.hero.gear[item.slot];
+    if (old) meta.hero.inventory.push(old);
+    meta.hero.gear[item.slot] = item;
+    saveMeta(meta);
   },
-  (cfg) => startMatch(cfg)
-);
+  onUnequip: (slot) => {
+    const old = meta.hero.gear[slot];
+    if (!old) return;
+    delete meta.hero.gear[slot];
+    meta.hero.inventory.push(old);
+    saveMeta(meta);
+  },
+  onCapitalUp: () => {
+    const cost = [0, 500, 1500][meta.capital.thLevel] || 0;
+    if (meta.capital.thLevel < 3 && meta.capital.gold >= cost) {
+      meta.capital.gold -= cost;
+      meta.capital.thLevel += 1;
+      saveMeta(meta);
+    }
+  },
+  onVault: () => {
+    meta.capital.gold += meta.clan.vault;
+    meta.clan.vault = 0;
+    saveMeta(meta);
+  },
+  onClanName: (name) => { meta.clan.name = name.slice(0, 24); saveMeta(meta); },
+  onWipe: () => wipeSeason(meta),
+  onPlay: () => openLobby(),
+});

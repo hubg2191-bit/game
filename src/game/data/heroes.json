@@ -1,11 +1,44 @@
 {
-  "version": "0.2",
+  "version": "0.4",
   "heroes": [
-    { "id": "warlord", "name": "Воевода", "stats": { "str": 8, "adm": 4, "spi": 5 }, "aura": "morale+10", "skills": [{ "id": "rush", "cd": 40, "mana": 30 }, { "id": "unbreakable", "cd": 90, "mana": 50 }] },
-    { "id": "steward", "name": "Наместник", "stats": { "str": 4, "adm": 9, "spi": 5 }, "aura": "build+15%", "skills": [{ "id": "convoy", "cd": 75, "mana": 40, "food": 250, "repair": 350 }, { "id": "fortify", "cd": 120, "mana": 60 }] },
-    { "id": "ranger", "name": "Следопыт", "stats": { "str": 5, "adm": 5, "spi": 8 }, "aura": "vision+30%", "skills": [{ "id": "ambush", "cd": 60, "mana": 35, "dur": 12 }, { "id": "mark", "cd": 50, "mana": 45, "mult": 1.3 }] }
+    {
+      "id": "warlord", "name": "Воевода",
+      "stats": { "str": 8, "adm": 4, "spi": 5 },
+      "growth": { "str": 2, "adm": 1, "spi": 1 },
+      "base": { "hp": 960, "dmg": 49, "speed": 5.0, "range": 0, "sight": 10, "armor": "heavy", "auraR": 5.5 },
+      "aura": { "morale": 10, "meleeDmg": 1.05 },
+      "skills": [
+        { "id": "rush", "name": "Рывок", "cd": 45, "mana": 30, "dur": 6, "radius": 5, "speedMult": 1.3 },
+        { "id": "unbreakable", "name": "Несгибаемые", "cd": 90, "mana": 50, "dur": 8, "radius": 5.5 }
+      ]
+    },
+    {
+      "id": "steward", "name": "Наместник",
+      "stats": { "str": 4, "adm": 9, "spi": 5 },
+      "growth": { "str": 1, "adm": 2, "spi": 1 },
+      "base": { "hp": 880, "dmg": 37, "speed": 5.2, "range": 0, "sight": 10, "armor": "medium", "auraR": 5.5 },
+      "aura": { "build": 1.15 },
+      "skills": [
+        { "id": "convoy", "name": "Обоз", "cd": 75, "mana": 40, "food": 200, "repair": 300, "radius": 5 },
+        { "id": "fortify", "name": "Укрепление", "cd": 120, "mana": 60, "dur": 30, "radius": 7.5, "shieldMult": 1.5 }
+      ]
+    },
+    {
+      "id": "ranger", "name": "Следопыт",
+      "stats": { "str": 5, "adm": 5, "spi": 8 },
+      "growth": { "str": 1, "adm": 1, "spi": 2 },
+      "base": { "hp": 860, "dmg": 40, "speed": 6.0, "range": 7.5, "sight": 13.75, "armor": "light", "auraR": 5.5 },
+      "aura": { "vision": 1.3, "speed": 1.1 },
+      "skills": [
+        { "id": "ambush", "name": "Засада", "cd": 60, "mana": 35, "dur": 10, "radius": 5 },
+        { "id": "mark", "name": "Метка", "cd": 50, "mana": 45, "dur": 8, "radius": 10, "mult": 1.3 }
+      ]
+    }
   ],
   "xpCurve": "100 * level^1.5",
-  "maxLevel": 30,
-  "gearSlots": ["weapon", "armor", "mount", "amulet"]
+  "maxLevel": 15,
+  "xpKills": { "militia": 10, "elite": 40, "base": 20, "hero": 200, "bandits": 200, "wolves": 50, "flag": 150 },
+  "eliteTypes": ["heavy_cav", "guard_nord", "nukers", "halberdiers", "ballista", "trebuchet"],
+  "gearSlots": ["weapon", "armor", "mount", "amulet"],
+  "respawnSec": 30
 }
