@@ -1,7 +1,7 @@
 // client/three — рендер 0.1: земля, здания, отряды (капсулы), флаги, трассеры, кольца выбора.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { WORLD_SCALE } from './sim.js';
+import { WORLD_SCALE, isVisible } from './sim.js';
 
 function canvasTexture(size, draw) {
   const c = document.createElement('canvas');
@@ -47,6 +47,7 @@ export class GameRender {
 
     this.buildGround(state);
     this.buildStatics(state);
+    this.buildFog(state);
 
     this.dyn = new THREE.Group(); // здания, отряды, флаги
     this.scene.add(this.dyn);
@@ -65,6 +66,7 @@ export class GameRender {
     for (const [k, hex] of Object.entries(palette.teams)) {
       this.teamMats[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.8 });
     }
+    this.teamMats.neutral = new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 1 });
     this.roofMats = {};
     for (const [k, f] of Object.entries(palette.factions)) {
       this.roofMats[k] = new THREE.MeshStandardMaterial({ color: f.roof, roughness: 0.9 });
@@ -82,6 +84,7 @@ export class GameRender {
   }
 
   teamMat(owner) {
+    if (owner === 'neutral') return this.teamMats.neutral;
     return this.teamMats[owner === 'player' ? 'p0' : 'p1'];
   }
 
@@ -189,6 +192,37 @@ export class GameRender {
     }
   }
 
+  buildFog(state) {
+    const N = state.fog.N;
+    this.fogCanvas = document.createElement('canvas');
+    this.fogCanvas.width = this.fogCanvas.height = N;
+    this.fogCtx = this.fogCanvas.getContext('2d');
+    this.fogTex = new THREE.CanvasTexture(this.fogCanvas);
+    this.fogTex.magFilter = THREE.NearestFilter;
+    const W = this.worldSize;
+    const mat = new THREE.MeshBasicMaterial({ map: this.fogTex, transparent: true, depthWrite: false });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, W), mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(W / 2, 0.6, W / 2);
+    mesh.renderOrder = 5;
+    this.scene.add(mesh);
+    this.lastFogDraw = -1;
+  }
+
+  drawFog(state) {
+    if (state.t - this.lastFogDraw < 0.19) return;
+    this.lastFogDraw = state.t;
+    const { N, vis, exp } = state.fog;
+    const img = this.fogCtx.createImageData(N, N);
+    for (let i = 0; i < N * N; i++) {
+      const o = i * 4;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = 0;
+      img.data[o + 3] = vis[i] ? 0 : exp[i] ? 115 : 218;
+    }
+    this.fogCtx.putImageData(img, 0, 0);
+    this.fogTex.needsUpdate = true;
+  }
+
   buildingSize(type) {
     switch (type) {
       case 'townhall': return { w: 9, h: 6, d: 9 };
@@ -196,7 +230,59 @@ export class GameRender {
       case 'tower': return { w: 3, h: 10, d: 3 };
       case 'house': return { w: 4, h: 3, d: 4 };
       case 'farm': return { w: 6, h: 1.5, d: 6 };
+      case 'mill': return { w: 3, h: 9, d: 3 };
+      case 'temple': return { w: 5, h: 4, d: 5 };
+      case 'market': return { w: 6, h: 3, d: 5 };
+      case 'mine': return { w: 5, h: 2.5, d: 5 };
       default: return { w: 5, h: 3.5, d: 5 };
+    }
+  }
+
+  // акцентные детали по типу (купол храма, лопасти мельницы, труба пекарни)
+  decorateBuilding(g, type, w, h, d, owner) {
+    if (type === 'mill') {
+      const blades = new THREE.Group();
+      const mat = new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.9 });
+      for (let i = 0; i < 4; i++) {
+        const arm = new THREE.Group();
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.5, 5.5, 0.2), mat);
+        blade.position.y = 2.75;
+        arm.add(blade);
+        arm.rotation.z = (i * Math.PI) / 2;
+        blades.add(arm);
+      }
+      blades.position.set(0, h - 1, d / 2 + 0.4);
+      g.add(blades);
+      g.userData.blades = blades;
+    } else if (type === 'temple') {
+      const dome = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(w, d) * 0.4, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+        new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.5, metalness: 0.4 })
+      );
+      dome.position.y = h;
+      g.add(dome);
+    } else if (type === 'bakery') {
+      const chimney = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 3, 1),
+        new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 1 })
+      );
+      chimney.position.set(w / 4, h + 1, 0);
+      g.add(chimney);
+    } else if (type === 'market') {
+      const awning = new THREE.Mesh(
+        new THREE.BoxGeometry(w + 1, 0.4, d + 1),
+        new THREE.MeshStandardMaterial({ color: owner === 'bot' ? 0xd23c2e : 0xe8b400, roughness: 0.9 })
+      );
+      awning.position.y = h + 0.6;
+      g.add(awning);
+    } else if (type === 'mine') {
+      const beams = new THREE.Mesh(
+        new THREE.BoxGeometry(w * 0.7, h * 1.6, 0.6),
+        new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 })
+      );
+      beams.position.y = h * 0.8;
+      beams.rotation.z = 0.5;
+      g.add(beams);
     }
   }
 
@@ -219,15 +305,17 @@ export class GameRender {
       const banner = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, h * 0.9, d + 0.3), this.teamMat(b.owner));
       banner.position.y = h / 2;
       g.add(body, roof, banner);
+      this.decorateBuilding(g, b.type, w, h, d, b.owner);
       g.position.set(b.x, 0, b.z);
       body.userData.entity = { kind: 'building', id: b.id };
       this.dyn.add(g);
       this.bMeshes.set(b.id, g);
     }
     if (g) {
-      g.visible = b.hp > 0;
+      g.visible = b.hp > 0 && isVisible(this.state, b);
       const progress = b.buildT > 0 ? 1 - b.buildT / b.buildTotal : 1;
       g.scale.setScalar(0.3 + 0.7 * progress);
+      if (g.userData.blades && b.hp > 0 && b.buildT <= 0) g.userData.blades.rotation.z += 0.02;
       g.traverse((o) => {
         if (o.isMesh) o.userData.entity = { kind: 'building', id: b.id };
       });
@@ -249,6 +337,8 @@ export class GameRender {
       this.sMeshes.set(s.id, g);
     }
     g.position.set(s.x, 0, s.z);
+    g.visible = isVisible(this.state, s);
+    g.rotation.y = s.face || 0;
     let i = 0;
     for (const child of g.children) {
       const sol = s.soldiers[i++];
@@ -348,11 +438,13 @@ export class GameRender {
       el.style.display = 'block';
     };
     for (const s of state.squads) {
+      if (s.owner !== 'player' && !isVisible(state, s)) continue;
       if (s.owner !== 'player' && s.hp / s.hpMax > 0.999) continue;
       put(`sq${s.id}`, s.x, 3.2, s.z, s.hp / s.hpMax, `${s.count}`);
     }
     for (const b of state.buildings) {
       if (b.hp <= 0 || b.hp / b.hpMax > 0.999) continue;
+      if (b.owner !== 'player' && !isVisible(state, b)) continue;
       put(`bd${b.id}`, b.x, 9, b.z, b.hp / b.hpMax, '');
     }
     for (const [key, el] of this.barEls) {
@@ -363,6 +455,7 @@ export class GameRender {
   sync(state, sel, dt) {
     this.consumeShots(state);
     this.updateTracers(dt);
+    this.drawFog(state);
     // здания
     const bIds = new Set();
     for (const b of state.buildings) {
@@ -402,7 +495,13 @@ export class GameRender {
     for (const h of hits) {
       let o = h.object;
       while (o && !o.userData.entity) o = o.parent;
-      if (o) return o.userData.entity;
+      if (!o) continue;
+      // невидимых в тумане выбирать/атаковать нельзя
+      const ent = o.userData.entity;
+      const list = ent.kind === 'squad' ? this.state.squads : this.state.buildings;
+      const target = list.find((x) => x.id === ent.id);
+      if (target && target.owner !== 'player' && !isVisible(this.state, target)) continue;
+      return ent;
     }
     return null;
   }

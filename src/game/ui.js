@@ -1,5 +1,5 @@
 // client/ui — HUD 0.1: ресурсы, панель выбора, найм, стройка, миникарта, оверлеи.
-import { affordable, recruitTime, buildTime, squadCap, MVP_RECRUIT, MVP_BUILD_MENU, unitById, buildingById } from './sim.js';
+import { affordable, recruitTime, buildTime, squadCap, capOf, tradeRate, upgrade, trade, MVP_RECRUIT, MVP_BUILD_MENU, unitById, buildingById, isVisible, WORLD_SCALE } from './sim.js';
 
 function costText(cost) {
   const names = { food: '🍞', wood: '🪵', stone: '🪨', iron: '⛓️', gold: '🪙' };
@@ -23,7 +23,7 @@ export class GameUI {
       <div id="feed"></div>
       <div id="selpanel" class="hidden"></div>
       <div id="buildmenu"></div>
-      <div id="hint">ЛКМ — выбрать (рамка — несколько) • ПКМ — идти/атаковать • WASD/край — камера • колесо — зум</div>
+      <div id="hint">ЛКМ — выбрать • ПКМ — идти/атаковать • A — атаковать-идти • S — стоп • H — Ратуша • Пробел — бой • Ctrl+1..9 — группы • ПКМ по миникарте — марш</div>
       <canvas id="minimap" width="180" height="180"></canvas>
       <div id="overlay"></div>`;
     this.top = root.querySelector('#topbar');
@@ -52,13 +52,19 @@ export class GameUI {
     };
   }
 
-  showEnd(winner, reason, score, onRestart) {
+  showEnd(winner, reason, score, stats, squads) {
     const win = winner === 'player';
+    const st = stats[winner];
+    const foe = winner === 'player' ? 'bot' : 'player';
+    const mvp = squads
+      .filter((s) => s.owner === winner)
+      .sort((a, b) => (b.kills || 0) - (a.kills || 0))[0];
     this.overlay.innerHTML = `
       <div class="card">
         <h1>${win ? 'Победа!' : 'Поражение'}</h1>
         <p>${reason}</p>
         <p>Счёт ${Math.floor(score.player)} : ${Math.floor(score.bot)}</p>
+        <p class="dim">Фраги ${st.kills} : ${stats[foe].kills} • Потери ${st.losses}${mvp ? ` • MVP-отряд: ${mvp.type} (${mvp.kills} убийств)` : ''}</p>
         <button id="againBtn">Ещё раз</button>
       </div>`;
     this.overlay.classList.remove('hidden');
@@ -66,20 +72,28 @@ export class GameUI {
   }
 
   update(state, sel) {
-    const r = state.players.player.res;
-    const prod = state.players.player._prod || {};
+    const p = state.players.player;
+    const r = p.res;
+    const prod = p._prod || {};
+    const hunger = p.starving ? ' <b class="hunger">⚠️ ГОЛОД</b>' : '';
     this.top.innerHTML = `
-      <span title="Еда">🍞 ${Math.floor(r.food)} <i>${prod.food ? '+' + prod.food.toFixed(1) : ''}</i></span>
-      <span title="Дерево">🪵 ${Math.floor(r.wood)} <i>${prod.wood ? '+' + prod.wood.toFixed(1) : ''}</i></span>
+      <span title="Еда (кап склада)">🍞 ${Math.floor(r.food)}/${capOf(state, 'player', 'food')} <i>${prod.food ? '+' + prod.food.toFixed(1) : ''}</i></span>
+      <span title="Дерево">🪵 ${Math.floor(r.wood)}/${capOf(state, 'player', 'wood')} <i>${prod.wood ? '+' + prod.wood.toFixed(1) : ''}</i></span>
       <span title="Камень">🪨 ${Math.floor(r.stone)}</span>
       <span title="Железо">⛓️ ${Math.floor(r.iron)}</span>
       <span title="Золото">🪙 ${Math.floor(r.gold)}</span>
       <span title="Население">👥 ${r.popUsed}/${r.popMax}</span>
-      <span title="Лимит отрядов">⚔️ ${state.squads.filter((s) => s.owner === 'player').length}/${squadCap(state, 'player')}</span>`;
+      <span title="Лимит отрядов">⚔️ ${state.squads.filter((s) => s.owner === 'player').length}/${squadCap(state, 'player')}</span>${hunger}`;
+    // полоса счёта по hud-battle.md: флаги, доход, прогноз
     const win = state.map.winScore || 1000;
+    const flP = state.flags.filter((f) => f.owner === 'player').length;
+    const flB = state.flags.filter((f) => f.owner === 'bot').length;
+    const rates = state.map.scorePerSec || {};
+    const inc = flP >= 3 ? rates['3flags'] : flP === 2 ? rates['2flags'] : flP === 1 ? rates['1flag'] : 0;
+    const forecast = inc > 0 ? ` • победа через ${Math.max(0, Math.ceil((win - state.score.player) / inc))}с` : '';
     this.score.innerHTML = `
       <b class="me">${Math.floor(state.score.player)}</b>
-      <span>${fmtTime(state.t)} • до ${win}</span>
+      <span>${fmtTime(state.t)} • до ${win} • 🚩${flP}-${flB} • +${inc || 0}/с${forecast}</span>
       <b class="en">${Math.floor(state.score.bot)}</b>`;
     // лента событий
     if (state.events.length !== this.seenEvents) {
@@ -106,9 +120,19 @@ export class GameUI {
       const q = b.queue[0];
       let html = `<h3>${def.name} <span class="hp">${Math.ceil(b.hp)}/${b.hpMax}</span></h3>`;
       if (b.buildT > 0) html += `<div>Строится: ${Math.ceil(b.buildT)}с</div>`;
+      if (b.upT > 0) html += `<div>Улучшается: ${Math.ceil(b.upT)}с</div>`;
       if (q) {
         const u = unitById(state.units, q.unitId);
         html += `<div>Найм: ${u.name} ${Math.ceil(q.t)}с</div><div class="qbar"><div style="width:${((1 - q.t / q.total) * 100).toFixed(0)}%"></div></div>`;
+      }
+      if (b.type === 'townhall' && b.level < (def.levels || 3) && !b.upT) {
+        const cost = def.cost[b.level];
+        const ok = affordable(r, cost);
+        html += `<button data-up ${ok ? '' : 'disabled'}>Улучшить до ур.${b.level + 1} ${costText(cost)}</button>`;
+      }
+      if (b.type === 'market' && b.buildT <= 0) {
+        const rate = Math.round(tradeRate(state, 'player'));
+        html += `<button data-trade ${r.wood >= 100 ? '' : 'disabled'}>Обменять 100🪵 → ${rate}🪙</button>`;
       }
       for (const uid of MVP_RECRUIT[b.type] || []) {
         const u = unitById(state.units, uid);
@@ -121,6 +145,10 @@ export class GameUI {
       this.panel.querySelectorAll('[data-rec]').forEach((btn) => {
         btn.onclick = () => this.cb.onRecruit(b.id, btn.dataset.rec);
       });
+      const upBtn = this.panel.querySelector('[data-up]');
+      if (upBtn) upBtn.onclick = () => this.cb.onUpgrade(b.id);
+      const trBtn = this.panel.querySelector('[data-trade]');
+      if (trBtn) trBtn.onclick = () => this.cb.onTrade(b.id);
       return;
     }
     if (sel.squads.length) {
@@ -165,7 +193,7 @@ export class GameUI {
   drawMinimap(state) {
     const g = this.mm;
     const S = 180;
-    const W = state.map.size_m * 0.25; // мировые единицы (см. sim WORLD_SCALE)
+    const W = state.map.size_m * WORLD_SCALE; // мировые единицы (см. sim WORLD_SCALE)
     g.fillStyle = '#101820';
     g.fillRect(0, 0, S, S);
     const px = (v) => (v / W) * S;
@@ -179,11 +207,13 @@ export class GameUI {
     }
     for (const b of state.buildings) {
       if (b.hp <= 0) continue;
-      g.fillStyle = b.owner === 'player' ? '#2f9dff' : '#ff4d4d';
+      if (b.owner !== 'player' && !isVisible(state, b)) continue;
+      g.fillStyle = b.owner === 'player' ? '#2f9dff' : b.owner === 'neutral' ? '#888' : '#ff4d4d';
       g.fillRect(px(b.x) - 2, px(b.z) - 2, 4, 4);
     }
     for (const s of state.squads) {
-      g.fillStyle = s.owner === 'player' ? '#9fd0ff' : '#ff9d9d';
+      if (s.owner !== 'player' && !isVisible(state, s)) continue;
+      g.fillStyle = s.owner === 'player' ? '#9fd0ff' : s.owner === 'neutral' ? '#aaa' : '#ff9d9d';
       g.beginPath();
       g.arc(px(s.x), px(s.z), 1.6, 0, 7);
       g.fill();
