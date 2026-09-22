@@ -1,0 +1,35 @@
+{
+  "version": "0.3",
+  "races": [
+    {
+      "id": "nord",
+      "name": "Нордвейн",
+      "desc": "Оборона и пехота. Стены +30% HP, казармы 20% быстрее.",
+      "startBonus": { "stone": 100 },
+      "barracksSpeed": 1.2,
+      "wallHpMult": 1.3,
+      "uniqueBuilding": "hall_nord",
+      "uniqueUnit": "guard_nord"
+    },
+    {
+      "id": "kaganat",
+      "name": "Степной Каганат",
+      "desc": "Рейды и кавалерия. Кава +15% скорости, грабеж +30%.",
+      "startBonus": { "food": 100 },
+      "cavSpeedMult": 1.15,
+      "lootMult": 1.3,
+      "uniqueBuilding": "tabun_kaganat",
+      "uniqueUnit": "nukers"
+    },
+    {
+      "id": "league",
+      "name": "Вольная Лига",
+      "desc": "Экономика. +150 золота и рынок на старте, золото +15%.",
+      "startBonus": { "gold": 150 },
+      "goldMult": 1.15,
+      "startMarket": true,
+      "uniqueBuilding": "guild_league",
+      "uniqueUnit": "halberdiers"
+    }
+  ]
+}

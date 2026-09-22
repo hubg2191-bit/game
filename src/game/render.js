@@ -1,7 +1,7 @@
 // client/three — рендер 0.1: земля, здания, отряды (капсулы), флаги, трассеры, кольца выбора.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { WORLD_SCALE, isVisible } from './sim.js';
+import { WORLD_SCALE, isVisible, teamOf } from './sim.js';
 
 function canvasTexture(size, draw) {
   const c = document.createElement('canvas');
@@ -48,6 +48,7 @@ export class GameRender {
     this.buildGround(state);
     this.buildStatics(state);
     this.buildFog(state);
+    this.buildRiver(state);
 
     this.dyn = new THREE.Group(); // здания, отряды, флаги
     this.scene.add(this.dyn);
@@ -85,7 +86,7 @@ export class GameRender {
 
   teamMat(owner) {
     if (owner === 'neutral') return this.teamMats.neutral;
-    return this.teamMats[owner === 'player' ? 'p0' : 'p1'];
+    return this.teamMats[{ player: 'p0', ally: 'p2', enemy1: 'p1', enemy2: 'p3', bot: 'p1' }[owner] || 'p1'];
   }
 
   buildGround(state) {
@@ -209,6 +210,33 @@ export class GameRender {
     this.lastFogDraw = -1;
   }
 
+  buildRiver(state) {
+    const r = state.river;
+    if (!r) return;
+    const W = this.worldSize;
+    const waterMat = new THREE.MeshBasicMaterial({ color: 0x2a6f9e, transparent: true, opacity: 0.75 });
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(r.half * 2, W), waterMat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(r.x, 0.25, W / 2);
+    this.scene.add(water);
+    const bridgeMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 });
+    const addBridge = (z, half) => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(r.half * 2 + 6, 0.5, half * 2), bridgeMat);
+      b.position.set(r.x, 0.35, z);
+      this.scene.add(b);
+    };
+    for (const b of r.bridges) addBridge(b.z, b.half);
+    if (r.ford) {
+      const ford = new THREE.Mesh(
+        new THREE.PlaneGeometry(r.half * 2, r.ford.half * 2),
+        new THREE.MeshBasicMaterial({ color: 0x7fb8d9, transparent: true, opacity: 0.6 })
+      );
+      ford.rotation.x = -Math.PI / 2;
+      ford.position.set(r.x, 0.3, r.ford.z);
+      this.scene.add(ford);
+    }
+  }
+
   drawFog(state) {
     if (state.t - this.lastFogDraw < 0.19) return;
     this.lastFogDraw = state.t;
@@ -230,6 +258,7 @@ export class GameRender {
       case 'tower': return { w: 3, h: 10, d: 3 };
       case 'house': return { w: 4, h: 3, d: 4 };
       case 'farm': return { w: 6, h: 1.5, d: 6 };
+      case 'wall': return { w: 1.9, h: 2.6, d: 1.0 };
       case 'mill': return { w: 3, h: 9, d: 3 };
       case 'temple': return { w: 5, h: 4, d: 5 };
       case 'market': return { w: 6, h: 3, d: 5 };
@@ -271,7 +300,7 @@ export class GameRender {
     } else if (type === 'market') {
       const awning = new THREE.Mesh(
         new THREE.BoxGeometry(w + 1, 0.4, d + 1),
-        new THREE.MeshStandardMaterial({ color: owner === 'bot' ? 0xd23c2e : 0xe8b400, roughness: 0.9 })
+        new THREE.MeshStandardMaterial({ color: owner === 'player' || owner === 'ally' ? 0xe8b400 : 0xd23c2e, roughness: 0.9 })
       );
       awning.position.y = h + 0.6;
       g.add(awning);
@@ -291,23 +320,32 @@ export class GameRender {
     if (!g && b.hp > 0) {
       g = new THREE.Group();
       const { w, h, d } = this.buildingSize(b.type);
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(w, h, d),
-        new THREE.MeshStandardMaterial({ color: 0xd9c9a3, roughness: 0.9 })
-      );
-      body.position.y = h / 2;
-      const roof = new THREE.Mesh(
-        new THREE.ConeGeometry(Math.max(w, d) * 0.72, h * 0.7, 4),
-        this.roofMats[b.owner === 'bot' ? 'kaganat' : 'nord'].clone()
-      );
-      roof.position.y = h + h * 0.35;
-      roof.rotation.y = Math.PI / 4;
-      const banner = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, h * 0.9, d + 0.3), this.teamMat(b.owner));
-      banner.position.y = h / 2;
-      g.add(body, roof, banner);
-      this.decorateBuilding(g, b.type, w, h, d, b.owner);
+      if (b.type === 'wall') {
+        const stone = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 1 });
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stone);
+        seg.position.y = h / 2;
+        const teeth = new THREE.Mesh(new THREE.BoxGeometry(w, 0.5, d), this.teamMat(b.owner));
+        teeth.position.y = h + 0.25;
+        g.add(seg, teeth);
+      } else {
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(w, h, d),
+          new THREE.MeshStandardMaterial({ color: 0xd9c9a3, roughness: 0.9 })
+        );
+        body.position.y = h / 2;
+        const roof = new THREE.Mesh(
+          new THREE.ConeGeometry(Math.max(w, d) * 0.72, h * 0.7, 4),
+          (this.roofMats[{ nord: 'nord', kaganat: 'kaganat', league: 'league' }[this.state.raceOf?.[b.owner]] || 'nord']).clone()
+        );
+        roof.position.y = h + h * 0.35;
+        roof.rotation.y = Math.PI / 4;
+        const banner = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, h * 0.9, d + 0.3), this.teamMat(b.owner));
+        banner.position.y = h / 2;
+        g.add(body, roof, banner);
+        this.decorateBuilding(g, b.type, w, h, d, b.owner);
+      }
       g.position.set(b.x, 0, b.z);
-      body.userData.entity = { kind: 'building', id: b.id };
+      g.traverse((o) => { if (o.isMesh) o.userData.entity = { kind: 'building', id: b.id }; });
       this.dyn.add(g);
       this.bMeshes.set(b.id, g);
     }
@@ -339,10 +377,13 @@ export class GameRender {
     g.position.set(s.x, 0, s.z);
     g.visible = isVisible(this.state, s);
     g.rotation.y = s.face || 0;
+    // рассыпной строй — бойцы шире
+    const spread = s.loose ? 2 : 1;
     let i = 0;
     for (const child of g.children) {
       const sol = s.soldiers[i++];
       child.visible = !!(sol && sol.alive);
+      if (sol) child.position.set(sol.dx * spread, 0.9, sol.dz * spread);
     }
   }
 
@@ -500,7 +541,7 @@ export class GameRender {
       const ent = o.userData.entity;
       const list = ent.kind === 'squad' ? this.state.squads : this.state.buildings;
       const target = list.find((x) => x.id === ent.id);
-      if (target && target.owner !== 'player' && !isVisible(this.state, target)) continue;
+      if (target && teamOf(this.state, target.owner) !== 'A' && !isVisible(this.state, target)) continue;
       return ent;
     }
     return null;

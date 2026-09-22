@@ -7,6 +7,45 @@ export const WORLD_SCALE = 0.25;
 export const SIM_TICK_HZ = 15;
 export const FOG_HZ = 5;
 
+// Детерминированный RNG для реплеев (07-tech: реплей = лог команд)
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Наём 0.3: базовые списки; уникальные юниты открываются уникальными зданиями своей расы
+const BASE_RECRUIT = {
+  townhall: ['militia'],
+  barracks: ['swords', 'spears'],
+  shooting_range: ['archers', 'xbows'],
+  stable: ['light_cav', 'heavy_cav'],
+  siege_workshop: ['ballista', 'trebuchet'],
+  temple: ['healer'],
+};
+const UNIQUE_UNIT_NEED = { guard_nord: 'hall_nord', nukers: 'tabun_kaganat', halberdiers: 'guild_league' };
+export function recruitable(state, pid, btype) {
+  const list = [...(BASE_RECRUIT[btype] || [])];
+  const race = state.raceOf[pid];
+  const R = (state.racesData.races || []).find((r) => r.id === race);
+  if (R && btype === 'barracks' && R.uniqueUnit !== 'nukers'
+    && state.buildings.some((b) => b.owner === pid && b.type === R.uniqueBuilding && b.hp > 0)) {
+    if (R.uniqueUnit === 'guard_nord' || R.uniqueUnit === 'halberdiers') list.push(R.uniqueUnit);
+  }
+  if (R && btype === 'stable' && R.uniqueUnit === 'nukers'
+    && state.buildings.some((b) => b.owner === pid && b.type === 'tabun_kaganat' && b.hp > 0)) {
+    list.push('nukers');
+  }
+  return list;
+}
+// MVP_RECRUIT оставлен для совместимости UI 0.1/0.2
+export const MVP_RECRUIT = BASE_RECRUIT;
+
 const MELEE_PERIOD = 1.2; // v0.2: ближние 1.2с
 const RANGED_PERIOD_DEFAULT = 2.0; // v0.2: луки 2.0с (reload из data приоритетнее)
 const AGGRO_RADIUS = 16;
@@ -28,15 +67,21 @@ export const FOG_N = 64;
 const BASE_CAPS = { food: 2000, wood: 2000, stone: 1500, iron: 1200, gold: 5000 };
 const WAREHOUSE_BONUS = 600; // +к food/wood/stone/iron за склад
 
-export const MVP_RECRUIT = {
-  townhall: ['militia'],
-  barracks: ['swords', 'spears', 'archers'],
-};
-
 export const MVP_BUILD_MENU = [
   'farm', 'house', 'sawmill', 'quarry', 'mine',
-  'mill', 'bakery', 'market', 'temple', 'tower', 'warehouse',
+  'mill', 'bakery', 'market', 'temple', 'shooting_range', 'stable', 'siege_workshop',
+  'tower', 'wall', 'warehouse',
 ];
+// Уникальное здание расы добавляется в меню отдельно (см. buildMenuFor)
+export function buildMenuFor(state, pid) {
+  const list = [...MVP_BUILD_MENU];
+  const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]);
+  if (R && !list.includes(R.uniqueBuilding)) {
+    const ix = list.indexOf('siege_workshop');
+    list.splice(ix + 1, 0, R.uniqueBuilding);
+  }
+  return list;
+}
 
 const START_RES = { food: 650, wood: 650, stone: 300, iron: 200, gold: 350 };
 
@@ -104,6 +149,8 @@ function addSquad(state, owner, typeId, x, z, opts = {}) {
     hpCap: def.hpPer * def.size, // хил не воскрешает
     count: def.size,
     kills: 0,
+    loose: false, // рассыпной строй (F): -50% урона по площади
+    charge: 0, // разгон кавалерии для чардока
     mor: 70,
     order: null,
     atkCd: 0,
@@ -172,21 +219,67 @@ function baseLayout(sx, sz) {
   ].map(([type, dx, dz]) => ({ type, x: sx + dx, z: sz + dz }));
 }
 
-export function createGame(map, unitsData, buildingsData, rules) {
+// cfg: { mode: '1v1'|'2v2', races: {player, bot?, ally?, enemy1?, enemy2?}, difficulty: 'easy'|'normal'|'hard', seed }
+export const DIFFS = {
+  easy: { econ: 0.8, aggro: 3, label: 'Легко' },
+  normal: { econ: 1.0, aggro: 2, label: 'Норма' },
+  hard: { econ: 1.25, aggro: 2, label: 'Сложно' },
+};
+export function teamOf(state, pid) {
+  if (pid === 'neutral') return null;
+  return state.teamMap[pid];
+}
+export function sameTeam(state, a, b) {
+  if (a === 'neutral' || b === 'neutral') return false;
+  return state.teamMap[a] === state.teamMap[b];
+}
+
+export function createGame(map, unitsData, buildingsData, rules, racesData, cfg = {}) {
   nextId = 1;
+  const mode = cfg.mode || '1v1';
+  const seed = cfg.seed ?? Math.floor(Math.random() * 1e9);
+  const diff = DIFFS[cfg.difficulty] || DIFFS.normal;
+  const races = { player: 'nord', ...(cfg.races || {}) };
+  const pids = mode === '2v2' ? ['player', 'ally', 'enemy1', 'enemy2'] : ['player', 'bot'];
+  if (mode === '2v2') {
+    races.ally = races.ally || 'nord';
+    races.enemy1 = races.enemy1 || 'kaganat';
+    races.enemy2 = races.enemy2 || 'league';
+  } else {
+    races.bot = races.bot || (races.player === 'kaganat' ? 'league' : 'kaganat');
+  }
+  const teamMap = mode === '2v2'
+    ? { player: 'A', ally: 'A', enemy1: 'B', enemy2: 'B' }
+    : { player: 'A', bot: 'B' };
+  const mkRes = (raceId) => {
+    const base = { ...START_RES, popUsed: 0, popMax: 20, morale: 70 };
+    const R = (racesData.races || []).find((r) => r.id === raceId) || {};
+    for (const [k, v] of Object.entries(R.startBonus || {})) base[k] = (base[k] || 0) + v;
+    return base;
+  };
   const state = {
     map,
     units: unitsData,
     bdefs: buildingsData,
     rules,
+    racesData,
+    raceOf: races,
+    mode,
+    pids,
+    teamMap,
+    diff,
+    seed,
+    rng: mulberry32(seed),
     t: 0,
+    tick: 0,
     over: false,
-    winner: null,
+    winner: null, // 'A' | 'B'
     reason: '',
-    players: {
-      player: { id: 'player', team: 0, res: { ...START_RES, popUsed: 0, popMax: 20, morale: 70 }, bot: false, thinkT: 0 },
-      bot: { id: 'bot', team: 1, res: { ...START_RES, popUsed: 0, popMax: 20, morale: 70 }, bot: true, thinkT: 1 },
-    },
+    players: Object.fromEntries(pids.map((pid, i) => [pid, {
+      id: pid, res: mkRes(races[pid]),
+      bot: pid !== 'player', thinkT: 1 + i, townMor: 0, starving: false, tradeLog: [],
+      defensive: pid === 'ally', // союзник держит оборону, пушит только большим стаком
+    }])),
     buildings: [],
     squads: [],
     flags: map.provinces.map((p) => ({
@@ -194,28 +287,44 @@ export function createGame(map, unitsData, buildingsData, rules) {
       owner: null, progress: 0, capSec: p.capSec || 120,
     })),
     mines: (map.mines || []).map((pt) => ({ x: m(pt.x), z: m(pt.z) })),
+    mineSpots: (map.mines || []).map((pt) => ({ x: m(pt.x), z: m(pt.z) })),
     camps: (map.camps || []).map((c) => ({ type: c.type, x: m(c.x), z: m(c.z) })),
     hills: (map.hills || []).map((h) => ({ x: m(h.x), z: m(h.z), r: 12, h: h.h })),
     forests: (map.provinces || []).filter((p) => p.type === 'forest').map((p) => ({ x: m(p.x), z: m(p.z), r: FOREST_R })),
-    score: { player: 0, bot: 0 },
-    stats: { player: { kills: 0, losses: 0 }, bot: { kills: 0, losses: 0 } },
+    river: map.river ? {
+      x: m(map.river.x), half: m(map.river.width) / 2,
+      bridges: (map.river.bridges || []).map((b) => ({ z: m(b.z), half: m(8) / 2 })),
+      ford: map.river.ford ? { z: m(map.river.ford.z), half: m(map.river.ford.width) / 2 } : null,
+    } : null,
+    score: { A: 0, B: 0 },
+    stats: Object.fromEntries(pids.map((pid) => [pid, { kills: 0, losses: 0 }])),
     lastCombat: null,
     events: [],
     fog: { N: FOG_N, vis: new Uint8Array(FOG_N * FOG_N), exp: new Uint8Array(FOG_N * FOG_N), t: 0 },
   };
-  const [s0, s1] = map.spawns;
-  const p0 = { x: m(s0.x), z: m(s0.z) };
-  const p1 = { x: m(s1.x), z: m(s1.z) };
-  for (const slot of baseLayout(p0.x, p0.z)) addBuilding(state, 'player', slot.type, slot.x, slot.z);
-  for (const slot of baseLayout(p1.x, p1.z)) addBuilding(state, 'bot', slot.type, slot.x, slot.z);
-  addSquad(state, 'player', 'militia', p0.x - 4, p0.z + 8);
-  addSquad(state, 'player', 'swords', p0.x + 4, p0.z + 8);
-  addSquad(state, 'bot', 'militia', p1.x - 4, p1.z - 8);
-  addSquad(state, 'bot', 'swords', p1.x + 4, p1.z - 8);
+  // спавны: 1v1 team0->player team1->bot; 2v2 team0->[player,ally] team1->[enemy1,enemy2]
+  const byTeam = { 0: [], 1: [] };
+  for (const sp of map.spawns) byTeam[sp.team === 1 ? 1 : 0].push(sp);
+  const assign = mode === '2v2'
+    ? [['player', byTeam[0][0]], ['ally', byTeam[0][1]], ['enemy1', byTeam[1][0]], ['enemy2', byTeam[1][1]]]
+    : [['player', byTeam[0][0]], ['bot', byTeam[1][0]]];
+  for (const [pid, sp] of assign) {
+    const px = m(sp.x);
+    const pz = m(sp.z);
+    state.players[pid]._bx = px;
+    state.players[pid]._bz = pz;
+    const layout = baseLayout(px, pz);
+    const R = (racesData.races || []).find((r) => r.id === races[pid]);
+    if (R?.startMarket) layout.push({ type: 'market', x: px + 12, z: pz - 10 });
+    for (const slot of layout) addBuilding(state, pid, slot.type, slot.x, slot.z);
+    const dz = pid === 'player' || pid === 'ally' ? 8 : -8;
+    addSquad(state, pid, 'militia', px - 4, pz + dz);
+    addSquad(state, pid, 'swords', px + 4, pz + dz);
+  }
   spawnNeutrals(state);
   recalcPop(state);
   updateFog(state); // стартовый обзор
-  event(state, 'Бой начался. Удерживайте флаги и снесите Ратушу врага.');
+  event(state, mode === '2v2' ? 'Бой 2v2 начался! Держите мосты и остров.' : 'Бой начался. Удерживайте флаги и снесите Ратушу врага.');
   return state;
 }
 
@@ -225,7 +334,7 @@ function event(state, text, kind = 'info') {
 }
 
 function recalcPop(state) {
-  for (const pid of ['player', 'bot']) {
+  for (const pid of state.pids) {
     const p = state.players[pid];
     let used = 0;
     let max = 20; // базовая вместимость столицы
@@ -264,7 +373,7 @@ export function recruit(state, pid, buildingId, unitId) {
   const b = state.buildings.find((x) => x.id === buildingId);
   const u = unitById(state.units, unitId);
   if (!b || !u || b.owner !== pid || b.buildT > 0) return false;
-  if (!(MVP_RECRUIT[b.type] || []).includes(unitId)) return false;
+  if (!recruitable(state, pid, b.type).includes(unitId)) return false;
   const p = state.players[pid];
   recalcPop(state);
   if (p.res.popUsed + 1 > p.res.popMax) return false;
@@ -273,6 +382,13 @@ export function recruit(state, pid, buildingId, unitId) {
   const owned = state.squads.filter((s) => s.owner === pid).length
     + state.buildings.filter((x) => x.owner === pid).reduce((a, x) => a + x.queue.length, 0);
   if (owned >= cap) return false;
+  // лимиты элиты (pacing): тяж.кава 3, требушет 2
+  if (u.limitPerPlayer) {
+    const have = state.squads.filter((s) => s.owner === pid && s.type === unitId).length
+      + state.buildings.filter((x) => x.owner === pid)
+        .reduce((a, x) => a + x.queue.filter((q) => q.unitId === unitId).length, 0);
+    if (have >= u.limitPerPlayer) return false;
+  }
   pay(p.res, u.cost);
   const t = recruitTime(u);
   b.queue.push({ unitId, t, total: t });
@@ -289,27 +405,54 @@ export function buildBlockReason(state, pid, typeId, x, z) {
   if (!def) return 'нет данных';
   if (def.requires === 'townhall-2' && thLevel(state, pid) < 2) return 'нужна Ратуша-2';
   if (def.requires === 'townhall-3' && thLevel(state, pid) < 3) return 'нужна Ратуша-3';
+  if (def.race && state.raceOf[pid] !== def.race) return 'чужая уникалка';
   if (def.needsMill && !state.buildings.some((b) => b.owner === pid && b.type === 'mill' && b.hp > 0)) {
     return 'нужна Мельница';
+  }
+  if (inWater(state, x, z)) return 'нельзя строить в воде';
+  if (typeId === 'wall') {
+    if (thLevel(state, pid) < 3) return 'каменные стены — с Ратуши-3';
+    const n = state.buildings.filter((b) => b.owner === pid && b.type === 'wall' && b.hp > 0).length;
+    if (n >= WALL_MAX) return `лимит стен (${WALL_MAX})`;
+    return null;
   }
   if (typeId === 'sawmill') {
     const ok = state.forests.some((f) => (x - f.x) ** 2 + (z - f.z) ** 2 < 20 * 20);
     if (!ok) return 'лесопилка только у леса (в 20м)';
   }
   if (typeId === 'mine') {
-    const ok = state.hills.some((h) => (x - h.x) ** 2 + (z - h.z) ** 2 < 15 * 15);
-    if (!ok) return 'шахта только у холмов';
+    const ok = state.hills.some((h) => (x - h.x) ** 2 + (z - h.z) ** 2 < 15 * 15)
+      || state.mineSpots.some((sp) => (x - sp.x) ** 2 + (z - sp.z) ** 2 < 15 * 15);
+    if (!ok) return 'шахта только у холмов/рудников';
   }
   return null;
 }
 export function construct(state, pid, typeId, x, z) {
+  if (!buildMenuFor(state, pid).includes(typeId)) return false;
   const def = buildingById(state.bdefs, typeId);
-  if (!def || !MVP_BUILD_MENU.includes(typeId)) return false;
+  if (!def) return false;
   const p = state.players[pid];
   const block = buildBlockReason(state, pid, typeId, x, z);
   if (block) {
     if (pid === 'player') event(state, `Нельзя построить: ${block}`, 'combat');
     return false;
+  }
+  if (typeId === 'wall') {
+    // сегмент на сетке 1 ед., цена/HP по wall.md
+    const gx = Math.round(x);
+    const gz = Math.round(z);
+    const busy = state.buildings.some((b) => b.hp > 0 && Math.hypot(b.x - gx, b.z - gz) < 1.2);
+    if (busy) {
+      if (pid === 'player') event(state, 'Нельзя построить: занято', 'combat');
+      return false;
+    }
+    if ((p.res.stone || 0) < WALL_COST) return false;
+    p.res.stone -= WALL_COST;
+    const b = addBuilding(state, pid, 'wall', gx, gz, { hp: 1, buildT: 4, buildTotal: 4 });
+    b.wallHp = wallHpOf(state, pid);
+    recalcPop(state);
+    event(state, 'Строится стена');
+    return true;
   }
   if (!affordable(p.res, def.cost)) return false;
   pay(p.res, def.cost);
@@ -365,12 +508,12 @@ function nearestEnemy(state, s, range) {
   let best = null;
   let bestD = range * range;
   for (const o of state.squads) {
-    if (o.owner === s.owner || o.count <= 0) continue;
+    if (o.owner === s.owner || sameTeam(state, o.owner, s.owner) || o.count <= 0) continue;
     const d = (o.x - s.x) ** 2 + (o.z - s.z) ** 2;
     if (d < bestD) { bestD = d; best = { kind: 'squad', id: o.id }; }
   }
   for (const b of state.buildings) {
-    if (b.owner === s.owner) continue;
+    if (b.hp <= 0 || sameTeam(state, b.owner, s.owner)) continue;
     const d = (b.x - s.x) ** 2 + (b.z - s.z) ** 2;
     if (d < bestD) { bestD = d; best = { kind: 'building', id: b.id }; }
   }
@@ -406,10 +549,72 @@ export function nearOwn(state, pid, type, x, z, radius) {
       && (x - b.x) ** 2 + (z - b.z) ** 2 < radius * radius
   );
 }
-// Эффективная мораль: база + аура храма (+10 рядом) + запах хлеба (+5 при рабочей пекарне)
+// Река v0.3 (skirmish-river): вода -40%, мосты — чок без штрафа, брод -20%
+export function waterMult(state, x, z) {
+  const r = state.river;
+  if (!r) return 1;
+  if (Math.abs(x - r.x) > r.half) return 1;
+  for (const b of r.bridges) if (Math.abs(z - b.z) < b.half) return 1;
+  if (r.ford && Math.abs(z - r.ford.z) < r.ford.half) return 0.8;
+  return 0.6;
+}
+export function inWater(state, x, z) {
+  const r = state.river;
+  if (!r) return false;
+  if (Math.abs(x - r.x) > r.half) return false;
+  for (const b of r.bridges) if (Math.abs(z - b.z) < b.half) return false;
+  if (r.ford && Math.abs(z - r.ford.z) < r.ford.half) return false;
+  return true;
+}
+// Стены v0.3: сегмент 4м, камень 900 HP/сегмент, 120 камня
+export const WALL_SEG_M = 4;
+export const WALL_HP = 900 * WALL_SEG_M;
+export const WALL_COST = 120;
+export const WALL_MAX = 30;
+export function wallHpOf(state, pid) {
+  const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]) || {};
+  return Math.round(WALL_HP * (R.wallHpMult || 1));
+}
+// Отталкивание от стен (стенам нет ворот в 0.3 — стройте с проходами)
+function collideWalls(state, s) {
+  for (const b of state.buildings) {
+    if (b.type !== 'wall' || b.hp <= 0 || b.buildT > 0) continue;
+    const dx = s.x - b.x;
+    const dz = s.z - b.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1.1 && d > 0.001) {
+      s.x = b.x + (dx / d) * 1.1;
+      s.z = b.z + (dz / d) * 1.1;
+    }
+  }
+}
+// Удар по площади (требушет): своим — 50% дружурон, рассыпному строю — 50% (05-units)
+function aoeStrike(state, s, tx, tz) {
+  const def = defOf(state, s.type, s.owner);
+  const R = m(def.aoeR || 6);
+  for (const v of state.squads) {
+    if (v.count <= 0 || v.id === s.id) continue;
+    const d = Math.hypot(v.x - tx, v.z - tz);
+    if (d > R) continue;
+    const own = sameTeam(state, v.owner, s.owner);
+    if (own && v.owner === 'neutral') continue;
+    let mult = own ? 0.5 : 1;
+    if (v.loose) mult *= 0.5;
+    dealDamage(state, s, { kind: 'squad', id: v.id }, mult);
+  }
+}
+// Бонус баллисты МК-II Лиги при живой Гильдии (+20% урон, +5м дальность)
+function siegeBonus(state, s) {
+  if (s.type !== 'ballista') return { dmg: 1, range: 0 };
+  const league = state.raceOf[s.owner] === 'league';
+  const guild = state.buildings.some((b) => b.owner === s.owner && b.type === 'guild_league' && b.hp > 0 && b.buildT <= 0);
+  return league && guild ? { dmg: 1.2, range: m(5) } : { dmg: 1, range: 0 };
+}
+// Эффективная мораль: база + аура храма/холла (+10 рядом) + запах хлеба (+5 при рабочей пекарне)
 export function effMor(state, s) {
   let m = s.mor;
   if (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA)) m += 10;
+  if (nearOwn(state, s.owner, 'hall_nord', s.x, s.z, 7.5)) m += 10;
   if (state.players[s.owner]?.townMor) m += state.players[s.owner].townMor;
   return m;
 }
@@ -428,6 +633,11 @@ function dealDamage(state, src, target, mult = 1) {
   const baseDmg = def ? def.dmg : src.dmg || 10;
   let dmg = baseDmg * mult;
   if (def && e.type && CAV_IDS.has(e.type) && def.bonusVsCav) dmg *= def.bonusVsCav;
+  if (def && e.count !== undefined) {
+    // пробитие по тяжелой броне (xbows 1.5, halberdiers 2.0)
+    const eDef = defOf(state, e.type, e.owner);
+    if (def.bonusVsHeavy && eDef.armor === 'heavy') dmg *= def.bonusVsHeavy;
+  }
   const fm = e.count !== undefined ? flankMultOf(state, src, e) : 1;
   dmg *= fm;
   if (onHill(state, src.x, src.z)) dmg *= 1 + (state.rules.heightBonus ?? 0.15);
@@ -456,30 +666,40 @@ function dealDamage(state, src, target, mult = 1) {
       onSquadWiped(state, src, e);
     }
   } else {
-    e.hp -= dmg;
+    // здания: стены — осадные x1.5, пехота 50% (wall.md)
+    let bm = 1;
+    if (e.type === 'wall' && def) {
+      const siege = src.type === 'ballista' || src.type === 'trebuchet';
+      const melee = (def.range || 0) === 0;
+      bm = siege ? 1.5 : melee ? 0.5 : 1;
+    }
+    e.hp -= dmg * bm;
   }
 }
 
 function onSquadWiped(state, src, e) {
-  const killer = src.owner === 'player' || src.owner === 'bot' ? src.owner : null;
+  const killer = state.players[src.owner] ? src.owner : null;
   const bodies = e.soldiers.length;
   if (killer) {
     state.stats[killer].kills += bodies;
     const ks = state.squads.find((x) => x.id === src.id);
     if (ks) ks.kills += bodies;
   }
-  if (e.owner === 'player' || e.owner === 'bot') state.stats[e.owner].losses += bodies;
+  if (state.stats[e.owner]) state.stats[e.owner].losses += bodies;
   state.lastCombat = { x: e.x, z: e.z, t: state.t };
   if (e.owner === 'neutral') {
     const nd = NEUTRAL_DEFS[e.type];
     if (nd && killer) {
       const p = state.players[killer];
+      const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[killer]);
+      const loot = R?.lootMult || 1; // каганат: грабеж +30%
       const parts = [];
       for (const [k, v] of Object.entries(nd.reward)) {
-        p.res[k] = Math.min(capOf(state, killer, k), p.res[k] + v);
-        parts.push(`+${v} ${k === 'food' ? 'еды' : 'золота'}`);
+        const amt = Math.round(v * (k === 'gold' || k === 'food' ? loot : 1));
+        p.res[k] = Math.min(capOf(state, killer, k), p.res[k] + amt);
+        parts.push(`+${amt} ${k === 'food' ? 'еды' : 'золота'}`);
       }
-      event(state, `Лагерь зачищен (${nd.name}): ${parts.join(', ')}`, 'flag');
+      if (killer === 'player') event(state, `Лагерь зачищен (${nd.name}): ${parts.join(', ')}`, 'flag');
     }
   } else {
     event(state, `Отряд ${defOf(state, e.type, e.owner).name} (${e.owner}) уничтожен`, 'combat');
@@ -517,7 +737,7 @@ function updateSquad(state, s, dt) {
     let best = null;
     let bestD = nd.aggro * nd.aggro;
     for (const o of state.squads) {
-      if (o.owner !== 'player' && o.owner !== 'bot') continue;
+      if (!state.players[o.owner]) continue; // нейтралы дерутся только с игроками
       if (o.count <= 0) continue;
       if (Math.hypot(o.x - s.home.x, o.z - s.home.z) > nd.leash) continue; // не гнаться далеко
       const d = (o.x - s.x) ** 2 + (o.z - s.z) ** 2;
@@ -578,7 +798,27 @@ function updateSquad(state, s, dt) {
     s.count = Math.max(s.count, Math.ceil(s.hp / def.hpPer));
   }
 
-  const range = m(def.range || 0) + 1.2;
+  // --- лекарь: лечит своих в 15м (6 HP/сек), не атакует ---
+  if (s.type === 'healer') {
+    let best = null;
+    let bestMissing = 0;
+    for (const o of state.squads) {
+      if (o.owner !== s.owner || o.count <= 0 || o.id === s.id) continue;
+      if (Math.hypot(o.x - s.x, o.z - s.z) > m(15)) continue;
+      const missing = o.hpCap - o.hp;
+      if (missing > bestMissing) { bestMissing = missing; best = o; }
+    }
+    if (best && bestMissing > 1) {
+      s.face = Math.atan2(best.x - s.x, best.z - s.z);
+      best.hp = Math.min(best.hpCap, best.hp + 6 * dt);
+      const per = defOf(state, best.type, best.owner).hpPer;
+      best.count = Math.max(best.count, Math.ceil(best.hp / per));
+    }
+  }
+
+  const sb = siegeBonus(state, s);
+  const range = m(def.range || 0) * (def.range ? 1 : 0) + sb.range + 1.2;
+  const minR = m(def.minRange || 0);
   const period = def.reload || (def.range ? RANGED_PERIOD_DEFAULT : MELEE_PERIOD);
 
   let moveX = null;
@@ -586,21 +826,34 @@ function updateSquad(state, s, dt) {
   let tgtRef = s.order && s.order.kind === 'attack' ? s.order.target : null;
   let tgt = tgtRef ? targetPos(state, tgtRef) : null;
   if (s.order && s.order.kind === 'attack' && !tgt) { s.order = null; tgtRef = null; }
-  if (!tgt && (!s.order || s.order.kind === 'attackmove')) {
+  if (!tgt && s.type !== 'healer' && (!s.order || s.order.kind === 'attackmove')) {
     const found = nearestEnemy(state, s, AGGRO_RADIUS);
     if (found) { tgtRef = found; tgt = targetPos(state, found); }
   }
-  if (tgt) {
+  if (tgt && s.type !== 'healer') {
     const d = Math.hypot(tgt.x - s.x, tgt.z - s.z);
     if (d <= range) {
       s.face = Math.atan2(tgt.x - s.x, tgt.z - s.z);
       if (s.atkCd <= 0) {
         s.atkCd = period;
-        let mult = 1;
+        let mult = sb.dmg;
         const p = state.players[s.owner];
         if (p.res.gold <= 0 && (def.upkeep?.gold || 0) > 0) mult *= 0.8; // нет золота на upkeep
-        dealDamage(state, s, tgtRef, mult);
+        // чардж кавалерии: разгон >1.5с — light x1.8, heavy x2 первые удары
+        if ((s.type === 'light_cav' && s.charge > 1.5) || (s.type === 'heavy_cav' && s.charge > 1.5)) {
+          mult *= s.type === 'heavy_cav' ? 2.0 : 1.8;
+        }
+        s.charge = 0;
+        if (def.aoe) {
+          aoeStrike(state, s, tgt.x, tgt.z);
+        } else {
+          dealDamage(state, s, tgtRef, mult);
+        }
       }
+    } else if (minR > 0 && d < minR) {
+      // мин.дистанция осадных: отъехать
+      moveX = s.x + (s.x - tgt.x);
+      moveZ = s.z + (s.z - tgt.z);
     } else {
       moveX = tgt.x;
       moveZ = tgt.z;
@@ -617,9 +870,26 @@ function updateSquad(state, s, dt) {
   if (moveX !== null) {
     const d = Math.hypot(moveX - s.x, moveZ - s.z) || 1;
     s.face = Math.atan2(moveX - s.x, moveZ - s.z);
-    const step = Math.min(d, def.speed * dt);
+    let speed = def.speed;
+    // каганат +15% каве; табун +10% каве рядом
+    if (CAV_IDS.has(s.type)) {
+      const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[s.owner]) || {};
+      speed *= R.cavSpeedMult || 1;
+      if (nearOwn(state, s.owner, 'tabun_kaganat', s.x, s.z, 6.25)) speed *= 1.1;
+    }
+    speed *= waterMult(state, s.x, s.z); // река -40%
+    const step = Math.min(d, speed * dt);
     s.x += ((moveX - s.x) / d) * step;
     s.z += ((moveZ - s.z) / d) * step;
+    s.charge = (s.charge || 0) + dt; // разгон для чардока
+    collideWalls(state, s);
+  }
+  // хил кавалерии у табуна 2%/сек вне боя
+  collideWalls(state, s); // стены держат всех (и бегущих тоже)
+  if (CAV_IDS.has(s.type) && state.t - s.lastDmgT > 6
+    && nearOwn(state, s.owner, 'tabun_kaganat', s.x, s.z, 6.25) && s.hp < s.hpCap) {
+    s.hp = Math.min(s.hpCap, s.hp + s.hpMax * 0.02 * dt);
+    s.count = Math.max(s.count, Math.ceil(s.hp / def.hpPer));
   }
 }
 
@@ -634,13 +904,18 @@ export function capOf(state, pid, res) {
 }
 
 function updateEconomy(state, dt) {
-  for (const pid of ['player', 'bot']) {
+  for (const pid of state.pids) {
     const p = state.players[pid];
+    const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[pid]) || {};
+    const econMult = p.bot ? state.diff.econ : 1; // сложность двигает только ботов
+    const goldMult = R.goldMult || 1; // лига +15% золота
     const prod = { food: 0, wood: 0, stone: 0, iron: 0, gold: 0 };
     let eaters = 0;
     let goldUp = 0;
-    const woodBuff = state.flags.some((f) => f.owner === pid && f.buff.includes('wood')) ? 1.15 : 1;
-    const goldBuff = state.flags.some((f) => f.owner === pid && f.buff.includes('gold')) ? 1.1 : 1;
+    const team = teamOf(state, pid);
+    const woodBuff = state.flags.some((f) => f.owner === team && (f.buff || '').includes('wood')) ? 1.15 : 1;
+    const goldBuff = state.flags.some((f) => f.owner === team && (f.buff || '').includes('gold')) ? 1.1 : 1;
+    const stoneBuff = state.flags.some((f) => f.owner === team && (f.buff || '').includes('stone')) ? 1.15 : 1;
     const hasMill = state.buildings.some((b) => b.owner === pid && b.type === 'mill' && b.hp > 0 && b.buildT <= 0);
     let bakeryOn = false;
     for (const b of state.buildings) {
@@ -658,13 +933,13 @@ function updateEconomy(state, dt) {
         bakeryOn = true;
       }
       if (def.woodPerSec) prod.wood += def.woodPerSec * woodBuff;
-      if (def.stonePerSec) prod.stone += def.stonePerSec;
+      if (def.stonePerSec) prod.stone += def.stonePerSec * stoneBuff;
       if (def.ironPerSec) prod.iron += def.ironPerSec;
-      if (b.type === 'market') prod.gold += 6 / 60; // +6 з/мин
+      if (b.type === 'market') prod.gold += (6 / 60) * goldMult; // +6 з/мин
       if (def.taxGoldPerMin) {
         // у Ратуши налог — массив по уровням, у остальных — число
         const tax = Array.isArray(def.taxGoldPerMin) ? def.taxGoldPerMin[b.level - 1] : def.taxGoldPerMin;
-        prod.gold += (tax / 60) * goldBuff;
+        prod.gold += ((tax / 60) * goldBuff * goldMult);
       }
       eaters += def.workers || 0;
     }
@@ -677,17 +952,21 @@ function updateEconomy(state, dt) {
       goldUp += (def.upkeep?.gold || 0) * (s.count / def.size);
       eaters += s.count;
     }
-    p.res.food += (prod.food - eaters * 0.02 - foodUp) * dt;
-    p.res.wood += prod.wood * dt;
-    p.res.stone += prod.stone * dt;
-    p.res.iron += prod.iron * dt;
-    p.res.gold = Math.max(0, p.res.gold + (prod.gold - goldUp) * dt);
+    p.res.food += (prod.food * econMult - eaters * 0.02 - foodUp) * dt;
+    p.res.wood += prod.wood * econMult * dt;
+    p.res.stone += prod.stone * econMult * dt;
+    p.res.iron += prod.iron * econMult * dt;
+    p.res.gold = Math.max(0, p.res.gold + (prod.gold * econMult - goldUp) * dt);
     p.res.food = Math.max(0, p.res.food);
     // капы складов
     for (const k of ['food', 'wood', 'stone', 'iron']) p.res[k] = Math.min(capOf(state, pid, k), p.res[k]);
     // голод: найм -30%, мораль -15/мин (обрабатывается в updateSquad/updateQueues)
     const starving = p.res.food <= 0;
-    if (starving && !p.starving) event(state, pid === 'player' ? 'ГОЛОД! Стройте фермы.' : 'У врага голод!', 'combat');
+    if (starving && !p.starving) {
+      const msg = pid === 'player' ? 'ГОЛОД! Стройте фермы.'
+        : team === 'A' ? 'Союзник голодает!' : 'У врага голод!';
+      event(state, msg, 'combat');
+    }
     p.starving = starving;
     p._prod = prod;
   }
@@ -700,9 +979,10 @@ function updateQueues(state, dt) {
       b.buildT -= dt;
       if (b.buildT <= 0) {
         const def = buildingById(state.bdefs, b.type);
-        b.hp = b.hpMax = Array.isArray(def.hp) ? def.hp[0] : def.hp || 500;
+        const full = b.type === 'wall' ? (b.wallHp || WALL_HP) : (Array.isArray(def.hp) ? def.hp[0] : def.hp || 500);
+        b.hp = b.hpMax = full;
         recalcPop(state);
-        if (b.owner === 'player') event(state, `Построено: ${def.name}`);
+        if (b.owner === 'player') event(state, `Построено: ${b.type === 'wall' ? 'Стена' : def.name}`);
       }
       continue;
     }
@@ -719,9 +999,11 @@ function updateQueues(state, dt) {
     }
     const q = b.queue[0];
     if (!q) continue;
-    // голод: найм -30% скорости
+    // голод: найм -30% скорости; норд: казармы +20%
+    const R = (state.racesData.races || []).find((r) => r.id === state.raceOf[b.owner]) || {};
     const slow = state.players[b.owner]?.starving ? 0.7 : 1;
-    q.t -= dt * slow;
+    const fast = b.type === 'barracks' && R.barracksSpeed ? R.barracksSpeed : 1;
+    q.t -= dt * slow * fast;
     if (q.t <= 0) {
       b.queue.shift();
       addSquad(state, b.owner, q.unitId, b.rally.x, b.rally.z);
@@ -741,7 +1023,7 @@ function updateTowers(state, dt) {
     let best = null;
     let bestD = range * range;
     for (const s of state.squads) {
-      if (s.owner === b.owner || s.count <= 0) continue;
+      if (s.count <= 0 || sameTeam(state, s.owner, b.owner)) continue;
       const d = (s.x - b.x) ** 2 + (s.z - b.z) ** 2;
       if (d < bestD) { bestD = d; best = s; }
     }
@@ -757,25 +1039,25 @@ function updateTowers(state, dt) {
 function updateFlags(state, dt) {
   const rates = state.map.scorePerSec || { '1flag': 5, '2flags': 12, '3flags': 20 };
   for (const f of state.flags) {
-    let nP = 0;
+    let nA = 0;
     let nB = 0;
     for (const s of state.squads) {
-      if (s.count <= 0) continue;
+      if (s.count <= 0 || s.owner === 'neutral') continue;
       if ((s.x - f.x) ** 2 + (s.z - f.z) ** 2 > CAPTURE_RADIUS * CAPTURE_RADIUS) continue;
-      if (s.owner === 'player') nP += s.count;
+      if (teamOf(state, s.owner) === 'A') nA += s.count;
       else nB += s.count;
     }
-    if (nP >= CAPTURE_MIN_SOLDIERS && nB < CAPTURE_MIN_SOLDIERS && f.owner !== 'player') {
-      f.progress += dt * (nP / 10) / (f.capSec / CAPTURE_TUNING);
+    if (nA >= CAPTURE_MIN_SOLDIERS && nB < CAPTURE_MIN_SOLDIERS && f.owner !== 'A') {
+      f.progress += dt * (nA / 10) / (f.capSec / CAPTURE_TUNING);
       if (f.progress >= 1) {
-        f.owner = 'player';
+        f.owner = 'A';
         f.progress = 0;
         event(state, `Флаг ${f.id} захвачен!`, 'flag');
       }
-    } else if (nB >= CAPTURE_MIN_SOLDIERS && nP < CAPTURE_MIN_SOLDIERS && f.owner !== 'bot') {
+    } else if (nB >= CAPTURE_MIN_SOLDIERS && nA < CAPTURE_MIN_SOLDIERS && f.owner !== 'B') {
       f.progress += dt * (nB / 10) / (f.capSec / CAPTURE_TUNING);
       if (f.progress >= 1) {
-        f.owner = 'bot';
+        f.owner = 'B';
         f.progress = 0;
         event(state, `Враг захватил флаг ${f.id}!`, 'flag');
       }
@@ -783,11 +1065,11 @@ function updateFlags(state, dt) {
       f.progress = Math.max(0, f.progress - dt * 0.05);
     }
   }
-  const owned = { player: 0, bot: 0 };
+  const owned = { A: 0, B: 0 };
   for (const f of state.flags) if (f.owner) owned[f.owner]++;
   const rate = (n) => (n >= 3 ? rates['3flags'] : n === 2 ? rates['2flags'] : n === 1 ? rates['1flag'] : 0) || 0;
-  state.score.player += rate(owned.player) * dt;
-  state.score.bot += rate(owned.bot) * dt;
+  state.score.A += rate(owned.A) * dt;
+  state.score.B += rate(owned.B) * dt;
 }
 
 // ---------- туман войны (серверный по GDD, здесь локальный; бот 0.2 видит всё — чит пустышки) ----------
@@ -817,29 +1099,29 @@ export function updateFog(state) {
     }
   };
   for (const s of state.squads) {
-    if (s.owner !== 'player' || s.count <= 0) continue;
+    if (teamOf(state, s.owner) !== 'A' || s.count <= 0) continue;
     paint(s.x, s.z, SIGHT.squad, false);
   }
   for (const b of state.buildings) {
-    if (b.owner !== 'player' || b.hp <= 0 || b.buildT > 0) continue;
+    if (teamOf(state, b.owner) !== 'A' || b.hp <= 0 || b.buildT > 0) continue;
     paint(b.x, b.z, sightOf(state, b), b.type === 'tower');
   }
 }
-// Видно ли сущность игроку: свои всегда; чужие — только в обзоре;
-// в лесу скрыты дальше STEALTH_DIST (башни 0.2 видят скрытых в своём обзоре).
+// Видно ли сущность команде игрока: свои всегда; чужие — только в обзоре;
+// в лесу скрыты дальше STEALTH_DIST (башни видят скрытых в своём обзоре).
 export function isVisible(state, e) {
-  if (e.owner === 'player') return true;
+  if (teamOf(state, e.owner) === 'A') return true;
   const idx = fogCell(state, e.x, e.z);
   if (!state.fog.vis[idx]) return false;
   if (e.count !== undefined && inForest(state, e.x, e.z)) {
     // рядом свой?
     for (const s of state.squads) {
-      if (s.owner !== 'player' || s.count <= 0) continue;
+      if (teamOf(state, s.owner) !== 'A' || s.count <= 0) continue;
       if (Math.hypot(s.x - e.x, s.z - e.z) < STEALTH_DIST) return true;
     }
     // башня видит скрытых в своём обзоре (20м)
     for (const b of state.buildings) {
-      if (b.owner !== 'player' || b.type !== 'tower' || b.hp <= 0 || b.buildT > 0) continue;
+      if (teamOf(state, b.owner) !== 'A' || b.type !== 'tower' || b.hp <= 0 || b.buildT > 0) continue;
       if (Math.hypot(b.x - e.x, b.z - e.z) < SIGHT.tower) return true;
     }
     return false;
@@ -848,43 +1130,64 @@ export function isVisible(state, e) {
 }
 
 function updateBot(state, dt) {
-  const p = state.players.bot;
-  p.thinkT -= dt;
-  if (p.thinkT > 0) return;
-  p.thinkT = BOT_THINK;
-  recalcPop(state);
-  // найм
-  const order = ['militia', 'swords', 'spears', 'archers'];
-  const hall = state.buildings.find((b) => b.owner === 'bot' && b.type === 'townhall' && b.hp > 0 && b.buildT <= 0);
-  const barr = state.buildings.find((b) => b.owner === 'bot' && b.type === 'barracks' && b.hp > 0 && b.buildT <= 0);
-  if (hall && hall.queue.length < 2) recruit(state, 'bot', hall.id, 'militia');
-  if (barr && barr.queue.length < 2) {
-    const pick = order[1 + Math.floor(Math.random() * 3)];
-    if (!recruit(state, 'bot', barr.id, pick)) recruit(state, 'bot', barr.id, 'swords');
-  }
-  // 0.2: ап Ратуши-2 и пара ферм/мельница после 4-й минуты
-  if (hall && hall.level === 1 && state.t > 240 && !hall.upT) upgrade(state, 'bot', hall.id);
-  if (state.t > 300 && !state._botBuilt) {
-    const bx = p._baseX ?? state.buildings.find((b) => b.owner === 'bot' && b.type === 'townhall')?.x;
-    const bz = p._baseZ ?? state.buildings.find((b) => b.owner === 'bot' && b.type === 'townhall')?.z;
-    if (bx !== undefined) {
-      if (construct(state, 'bot', 'farm', bx + 16, bz + 6)) state._botBuilt = 1;
-      else if (state._botBuilt === 1 && construct(state, 'bot', 'market', bx - 16, bz + 6)) state._botBuilt = 2;
+  for (const pid of state.pids) {
+    const p = state.players[pid];
+    if (!p.bot) continue;
+    p.thinkT -= dt;
+    if (p.thinkT > 0) continue;
+    p.thinkT = BOT_THINK;
+    recalcPop(state);
+    const R = state.rng;
+    // найм: ополчение + случайное из казармы; с конюшней — иногда кава
+    const hall = state.buildings.find((b) => b.owner === pid && b.type === 'townhall' && b.hp > 0 && b.buildT <= 0);
+    const barr = state.buildings.find((b) => b.owner === pid && b.type === 'barracks' && b.hp > 0 && b.buildT <= 0);
+    const stab = state.buildings.find((b) => b.owner === pid && b.type === 'stable' && b.hp > 0 && b.buildT <= 0);
+    if (hall && hall.queue.length < 2) recruit(state, pid, hall.id, 'militia');
+    if (barr && barr.queue.length < 2) {
+      const pool = recruitable(state, pid, 'barracks').filter((u) => u !== 'militia');
+      const pick = pool[Math.floor(R() * pool.length)] || 'swords';
+      if (!recruit(state, pid, barr.id, pick)) recruit(state, pid, barr.id, 'swords');
     }
-  }
-  if (state.t > 420) {
-    const anyMarket = state.buildings.some((b) => b.owner === 'bot' && b.type === 'market' && b.hp > 0 && b.buildT <= 0);
-    if (anyMarket && p.res.wood > 300) trade(state, 'bot');
-  }
-  // атака: собираем свободные отряды
-  const army = state.squads.filter((s) => s.owner === 'bot' && s.count > 0 && !s.order);
-  if (army.length >= 2) {
-    const free = state.flags.find((f) => f.owner !== 'bot');
-    const th = state.buildings.find((b) => b.owner === 'player' && b.type === 'townhall' && b.hp > 0);
-    const dest = free || th;
-    if (dest) {
-      for (const s of army) s.order = { kind: 'attackmove', x: dest.x, z: dest.z, target: null };
-      event(state, 'Враг наступает!', 'combat');
+    if (stab && stab.queue.length < 1 && R() < 0.5) {
+      const pool = recruitable(state, pid, 'stable');
+      recruit(state, pid, stab.id, pool[Math.floor(R() * pool.length)]);
+    }
+    if (hall && hall.level === 1 && state.t > 240 && !hall.upT) upgrade(state, pid, hall.id);
+    if (hall && hall.level === 2 && state.t > 900 && !hall.upT) upgrade(state, pid, hall.id);
+    // стройка: ферма -> рынок/мельница -> конюшня к лейту
+    const bx = p._bx;
+    const bz = p._bz;
+    if (state.t > 300 && bx !== undefined) {
+      const step = p._buildStep || 0;
+      const plan = [
+        ['farm', 16, 6], ['market', -16, 6], ['farm', 16, -8],
+        ['stable', -20, -10], ['shooting_range', 20, -10], ['temple', -12, 14],
+      ];
+      if (step < plan.length && construct(state, pid, plan[step][0], bx + plan[step][1], bz + plan[step][2])) {
+        p._buildStep = step + 1;
+      } else if (step < plan.length && state.t - (p._buildT || 0) > 30) {
+        p._buildT = state.t; // не топчемся: пропускаем ход
+        p._buildStep = step + 1;
+      }
+    }
+    if (state.t > 420) {
+      const anyMarket = state.buildings.some((b) => b.owner === pid && b.type === 'market' && b.hp > 0 && b.buildT <= 0);
+      if (anyMarket && p.res.wood > 300) trade(state, pid);
+    }
+    // атака: союзник держится до 3 отрядов, остальные идут от aggro
+    const need = p.defensive ? 3 : state.diff.aggro;
+    const army = state.squads.filter((s) => s.owner === pid && s.count > 0 && !s.order);
+    if (army.length >= need) {
+      const myTeam = teamOf(state, pid);
+      const free = state.flags.find((f) => f.owner !== myTeam);
+      const foeTH = state.buildings.find((b) => b.type === 'townhall' && b.hp > 0 && !sameTeam(state, b.owner, pid));
+      const dest = (army.length >= need + 2 && foeTH) ? foeTH : free || foeTH;
+      if (dest) {
+        for (const s of army) s.order = { kind: 'attackmove', x: dest.x, z: dest.z, target: null };
+        if (myTeam === 'B' && pid === state.pids.find((q) => state.players[q].bot && teamOf(state, q) === 'B')) {
+          event(state, 'Враг наступает!', 'combat');
+        }
+      }
     }
   }
 }
@@ -892,6 +1195,7 @@ function updateBot(state, dt) {
 export function update(state, dt) {
   if (state.over) return;
   state.t += dt;
+  state.tick += 1;
   updateEconomy(state, dt);
   updateQueues(state, dt);
   for (const s of state.squads) updateSquad(state, s, dt);
@@ -906,25 +1210,24 @@ export function update(state, dt) {
     state.fog.t = 0;
     updateFog(state);
   }
-  // условия победы
+  // условия победы — по командам
   const winScore = state.map.winScore || 1000;
-  const thP = state.buildings.find((b) => b.owner === 'player' && b.type === 'townhall');
-  const thB = state.buildings.find((b) => b.owner === 'bot' && b.type === 'townhall');
-  if ((!thB || thB.hp <= 0) || state.score.player >= winScore) {
+  const aliveTH = (team) => state.buildings.some((b) => b.type === 'townhall' && b.hp > 0 && teamOf(state, b.owner) === team);
+  if (!aliveTH('B') || state.score.A >= winScore) {
     state.over = true;
-    state.winner = 'player';
-    state.reason = !thB || thB.hp <= 0 ? 'Ратуша врага разрушена' : 'Доминация: 1000 очков';
-  } else if ((!thP || thP.hp <= 0) || state.score.bot >= winScore) {
+    state.winner = 'A';
+    state.reason = !aliveTH('B') ? 'Ратуши врага разрушены' : 'Доминация: 1000 очков';
+  } else if (!aliveTH('A') || state.score.B >= winScore) {
     state.over = true;
-    state.winner = 'bot';
-    state.reason = !thP || thP.hp <= 0 ? 'Ваша Ратуша разрушена' : 'Враг набрал 1000 очков';
+    state.winner = 'B';
+    state.reason = !aliveTH('A') ? 'Ваша Ратуша разрушена' : 'Враг набрал 1000 очков';
   }
   // разрушенные здания убираем из списков (оставляем руины рендеру через hp<=0)
   for (const b of state.buildings) {
     if (b.hp <= 0 && !b.ruined) {
       b.ruined = true;
       const def = buildingById(state.bdefs, b.type);
-      event(state, `${b.owner === 'player' ? 'Потеряно' : 'Уничтожено'}: ${def.name}`, 'combat');
+      event(state, `${teamOf(state, b.owner) === 'A' ? 'Потеряно' : 'Уничтожено'}: ${def.name}`, 'combat');
       recalcPop(state);
     }
   }

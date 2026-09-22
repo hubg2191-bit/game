@@ -5,7 +5,7 @@
     { "id": "swords", "name": "Мечники", "size": 20, "hpPer": 70, "dmg": 11, "armor": "medium", "speed": 4.2, "range": 0, "cost": { "food": 200, "iron": 140 }, "upkeep": { "food": 0.8, "gold": 0.1 } },
     { "id": "spears", "name": "Копейщики", "size": 20, "hpPer": 60, "dmg": 8, "armor": "medium", "speed": 4.1, "range": 0, "bonusVsCav": 3.5, "cost": { "food": 180, "iron": 120 }, "upkeep": { "food": 0.8, "gold": 0 } },
     { "id": "archers", "name": "Лучники", "size": 16, "hpPer": 35, "dmg": 6.5, "armor": "light", "speed": 4.5, "range": 45, "cost": { "food": 180, "wood": 100 }, "upkeep": { "food": 0.6, "gold": 0 } },
-    { "id": "xbows", "name": "Арбалетчики", "size": 12, "hpPer": 50, "dmg": 14, "armor": "medium", "speed": 3.8, "range": 40, "reload": 3.5, "cost": { "food": 250, "iron": 180 }, "upkeep": { "food": 0.7, "gold": 0.1 } },
+    { "id": "xbows", "name": "Арбалетчики", "size": 12, "hpPer": 50, "dmg": 14, "armor": "medium", "speed": 3.8, "range": 40, "reload": 3.5, "bonusVsHeavy": 1.5, "cost": { "food": 250, "iron": 180 }, "upkeep": { "food": 0.7, "gold": 0.1 } },
     { "id": "light_cav", "name": "Легкая кавалерия", "size": 10, "hpPer": 55, "dmg": 9, "armor": "light", "speed": 8.0, "range": 0, "cost": { "food": 250, "gold": 120 }, "upkeep": { "food": 1.0, "gold": 0.1 } },
     { "id": "heavy_cav", "name": "Тяжелая кавалерия", "size": 8, "hpPer": 140, "dmg": 15, "armor": "heavy", "speed": 6.5, "range": 0, "limitPerPlayer": 3, "cost": { "food": 400, "iron": 300, "gold": 200 }, "upkeep": { "food": 1.2, "gold": 0.4 } },
     { "id": "guard_nord", "name": "Гвардия Щитов", "size": 16, "hpPer": 105, "dmg": 11, "armor": "heavy", "speed": 3.6, "range": 0, "cost": { "food": 350, "iron": 250 }, "upkeep": { "food": 1.0, "gold": 0.2 } },
