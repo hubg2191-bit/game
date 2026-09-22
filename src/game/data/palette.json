@@ -1,0 +1,10 @@
+{
+  "version": "0.2",
+  "factions": {
+    "nord": { "cloak": "#2f6dff", "roof": "#1e3a8a", "flag": "#2f6dff" },
+    "kaganat": { "cloak": "#d23c2e", "roof": "#d9c9a3", "flag": "#d23c2e" },
+    "league": { "cloak": "#e8b400", "roof": "#c25700", "flag": "#e8b400" }
+  },
+  "teams": { "p0": "#2f9dff", "p1": "#ff4d4d", "p2": "#ffd23f", "p3": "#b07dff", "self": "#39d353" },
+  "budgets": { "drawCalls": 80, "tris": 300000, "instancesSoldiers": 2000, "particles": 500, "audioVoices": 16 }
+}

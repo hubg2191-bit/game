@@ -1,0 +1,17 @@
+{
+  "version": "0.2",
+  "buildings": [
+    { "id": "townhall", "name": "Ратуша", "levels": 3, "hp": [3000, 5000, 8000], "squadCap": [5, 8, 12], "taxGoldPerMin": [5, 8, 12], "cost": [{}, { "wood": 400, "stone": 300 }, { "iron": 400, "gold": 600 }] },
+    { "id": "house", "name": "Дом", "hp": 600, "cost": { "wood": 100 }, "pop": 10, "taxGoldPerMin": 2.5, "cap": 15 },
+    { "id": "warehouse", "name": "Склад", "hp": 800, "cost": { "wood": 120 }, "workers": 2, "capBonus": 600, "max": 3 },
+    { "id": "farm", "name": "Ферма", "hp": 500, "cost": { "wood": 80 }, "workers": 3, "foodPerSec": 3.2 },
+    { "id": "sawmill", "name": "Лесопилка", "hp": 500, "cost": { "wood": 80 }, "workers": 3, "woodPerSec": 2.6, "needs": "forest" },
+    { "id": "quarry", "name": "Каменоломня", "hp": 600, "cost": { "wood": 120, "food": 50 }, "workers": 4, "stonePerSec": 1.5 },
+    { "id": "mine", "name": "Шахта", "hp": 700, "cost": { "wood": 150, "stone": 100 }, "workers": 5, "ironPerSec": 1.1, "needs": "hill" },
+    { "id": "barracks", "name": "Казармы", "hp": 1200, "cost": { "wood": 250, "stone": 100 }, "workers": 4, "requires": "townhall-2" },
+    { "id": "stable", "name": "Конюшня", "hp": 1200, "cost": { "wood": 300, "iron": 200, "gold": 100 }, "workers": 4, "requires": "townhall-3" },
+    { "id": "wall", "name": "Стена", "hpPerM": 900, "costPerM": { "stone": 30 } },
+    { "id": "tower", "name": "Башня", "hp": 1500, "cost": { "wood": 200, "stone": 150 }, "workers": 2, "range": 40, "dmg": 12 },
+    { "id": "temple", "name": "Храм", "hp": 800, "cost": { "wood": 200, "gold": 100 }, "workers": 2, "moraleAura": 10 }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "skirmish_plain_v1",
+  "name": "Равнина",
+  "size_m": 1536,
+  "tile_m": 4,
+  "spawns": [
+    { "team": 0, "x": 768, "z": 150 },
+    { "team": 1, "x": 768, "z": 1386 }
+  ],
+  "provinces": [
+    { "id": "west", "x": 350, "z": 768, "type": "forest", "buff": "wood+15%", "capSec": 120 },
+    { "id": "center", "x": 768, "z": 768, "type": "gold", "buff": "gold+10%", "capSec": 120 },
+    { "id": "east", "x": 1186, "z": 768, "type": "forest", "buff": "wood+15%", "capSec": 120 }
+  ],
+  "mines": [
+    { "x": 600, "z": 250 }, { "x": 936, "z": 250 },
+    { "x": 600, "z": 1286 }, { "x": 936, "z": 1286 },
+    { "x": 700, "z": 768 }, { "x": 836, "z": 768 }
+  ],
+  "camps": [
+    { "type": "wolves", "x": 400, "z": 300 }, { "type": "wolves", "x": 1136, "z": 1236 },
+    { "type": "bandits", "x": 650, "z": 768 }, { "type": "bandits", "x": 886, "z": 768 }
+  ],
+  "hills": [{ "x": 700, "z": 700, "h": 4 }, { "x": 836, "z": 836, "h": 4 }],
+  "winScore": 1000,
+  "scorePerSec": { "1flag": 5, "2flags": 12, "3flags": 20 }
+}

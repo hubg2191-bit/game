@@ -1,0 +1,23 @@
+{
+  "id": "skirmish_river_v1",
+  "name": "Речная долина",
+  "size_m": 1536,
+  "tile_m": 4,
+  "river": { "x": 768, "width": 40, "bridges": [{ "z": 400 }, { "z": 1136 }], "ford": { "z": 768, "width": 30 } },
+  "spawns": [
+    { "team": 0, "x": 300, "z": 300 }, { "team": 0, "x": 300, "z": 1236 },
+    { "team": 1, "x": 1236, "z": 300 }, { "team": 1, "x": 1236, "z": 1236 }
+  ],
+  "provinces": [
+    { "id": "north_bridge", "x": 768, "z": 400, "type": "hill", "buff": "stone+15%", "capSec": 120 },
+    { "id": "south_bridge", "x": 768, "z": 1136, "type": "forest", "buff": "wood+15%", "capSec": 120 },
+    { "id": "island", "x": 768, "z": 768, "type": "gold", "buff": "gold+10%", "capSec": 120 }
+  ],
+  "mines": [
+    { "x": 300, "z": 450 }, { "x": 300, "z": 1086 },
+    { "x": 1236, "z": 450 }, { "x": 1236, "z": 1086 },
+    { "x": 768, "z": 768 }
+  ],
+  "camps": [{ "type": "bandits", "x": 768, "z": 650 }, { "type": "bandits", "x": 768, "z": 886 }],
+  "winScore": 1000
+}

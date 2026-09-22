@@ -1,0 +1,12 @@
+{
+  "version": "0.1",
+  "lengthDays": 90,
+  "phases": [
+    { "id": "settle", "days": "1-14", "mult": 0.5, "centerClosed": true },
+    { "id": "wars", "days": "15-70", "mult": 1.0, "centerClosed": false },
+    { "id": "final", "days": "71-85", "mult": 2.0, "centerMult": 3.0 },
+    { "id": "offseason", "days": "86-90", "frozen": true }
+  ],
+  "points": { "provPerMin": 10, "centerPerMin": 30, "soldierKill": 1, "t3Raz": 50, "skirmishWin": 100, "skirmishLose": 30 },
+  "wipe": { "keep": ["heroes", "gear", "gold_up_to_5000", "mmr_soft", "cosmetics", "clan_tag"], "cut": ["flags", "outposts", "walls_outside_capital"], "capitalTo": "townhall-2+5houses+warehouse+barracks" }
+}

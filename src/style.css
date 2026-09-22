@@ -1,8 +1,69 @@
-html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
-#app { width: 100%; height: 100%; }
-canvas { display: block; }
-#hud {
-  position: fixed; top: 12px; left: 12px; color: #fff; z-index: 10;
-  font: 14px/1.4 monospace; background: rgba(0,0,0,.5);
-  padding: 8px 12px; border-radius: 8px; pointer-events: none;
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; font-family: system-ui, sans-serif; }
+#app { position: fixed; inset: 0; }
+#scene { position: absolute; inset: 0; }
+#scene canvas { display: block; }
+#hud { position: absolute; inset: 0; pointer-events: none; color: #fff; }
+#hud button { pointer-events: auto; }
+
+#topbar {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 14px; background: rgba(0,0,0,.65);
+  padding: 8px 16px; border-radius: 10px; font-size: 14px; white-space: nowrap;
 }
+#topbar i { color: #7ee787; font-style: normal; font-size: 12px; }
+#scorebar {
+  position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 10px; align-items: center; background: rgba(0,0,0,.55);
+  padding: 4px 14px; border-radius: 8px; font-size: 13px;
+}
+#scorebar .me { color: #2f9dff; font-size: 18px; }
+#scorebar .en { color: #ff4d4d; font-size: 18px; }
+
+#feed { position: absolute; left: 10px; bottom: 10px; font-size: 12px; max-width: 320px; }
+#feed .ev { background: rgba(0,0,0,.55); margin-top: 4px; padding: 4px 8px; border-radius: 6px; }
+#feed .ev.combat { border-left: 3px solid #ff4d4d; }
+#feed .ev.flag { border-left: 3px solid #ffd23f; }
+
+#selpanel {
+  position: absolute; left: 10px; top: 100px; width: 260px;
+  background: rgba(0,0,0,.7); border-radius: 10px; padding: 10px 12px; font-size: 13px;
+}
+#selpanel.hidden { display: none; }
+#selpanel h3 { margin: 0 0 8px; font-size: 15px; }
+#selpanel .hp { color: #7ee787; font-size: 12px; }
+#selpanel button { display: block; width: 100%; margin-top: 6px; padding: 6px; border: 0; border-radius: 6px; background: #1f6feb; color: #fff; cursor: pointer; font-size: 12px; }
+#selpanel button:disabled { background: #444; cursor: default; }
+#selpanel .dim, .dim { color: #aaa; font-size: 11px; margin-top: 6px; }
+#selpanel .qbar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+#selpanel .qbar div { height: 100%; background: #7ee787; }
+
+#buildmenu {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; align-items: center; background: rgba(0,0,0,.65);
+  padding: 8px 12px; border-radius: 10px; font-size: 12px;
+}
+#buildmenu .btitle { color: #aaa; }
+#buildmenu button { padding: 6px 10px; border: 0; border-radius: 6px; background: #333; color: #fff; cursor: pointer; }
+#buildmenu button:disabled { opacity: .4; cursor: default; }
+#buildmenu button.active { background: #1f6feb; }
+
+#hint {
+  position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: #bbb; background: rgba(0,0,0,.45); padding: 3px 10px; border-radius: 6px;
+  white-space: nowrap;
+}
+#minimap { position: absolute; right: 10px; top: 10px; border: 1px solid #444; border-radius: 8px; background: #101820; }
+
+#rubber { position: fixed; left: 0; top: 0; border: 1px solid #39d353; background: rgba(57,211,83,.15); display: none; pointer-events: none; z-index: 30; }
+
+.bars-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.hpbar { position: absolute; left: 0; top: 0; width: 60px; height: 10px; background: rgba(0,0,0,.6); border-radius: 3px; }
+.hpbar .hpfill { height: 6px; background: #39d353; border-radius: 3px; }
+.hpbar .hplabel { font-size: 9px; color: #fff; text-align: center; line-height: 1; }
+
+#overlay.hidden { display: none; }
+#overlay { position: absolute; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 40; }
+#overlay .card { background: #161d2b; border: 1px solid #333; border-radius: 14px; padding: 28px 36px; text-align: center; max-width: 440px; }
+#overlay h1 { margin: 0 0 10px; font-size: 26px; }
+#overlay h1 span { font-size: 14px; color: #888; font-weight: normal; }
+#overlay button { margin-top: 14px; padding: 10px 28px; font-size: 16px; border: 0; border-radius: 8px; background: #1f6feb; color: #fff; cursor: pointer; }

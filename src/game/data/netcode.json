@@ -1,0 +1,13 @@
+{
+  "version": "0.2",
+  "simTickHz": 15,
+  "snapHz": { "battle": 10, "life": 3 },
+  "fogHz": 5,
+  "autosaveSec": 10,
+  "reconnectSec": 90,
+  "maxOrdersPerSec": 10,
+  "maxSnapKb": 256,
+  "mmrWindow": 200,
+  "queueSec": 60,
+  "simVersion": 12
+}

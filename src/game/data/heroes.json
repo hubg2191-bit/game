@@ -1,0 +1,11 @@
+{
+  "version": "0.2",
+  "heroes": [
+    { "id": "warlord", "name": "Воевода", "stats": { "str": 8, "adm": 4, "spi": 5 }, "aura": "morale+10", "skills": [{ "id": "rush", "cd": 40, "mana": 30 }, { "id": "unbreakable", "cd": 90, "mana": 50 }] },
+    { "id": "steward", "name": "Наместник", "stats": { "str": 4, "adm": 9, "spi": 5 }, "aura": "build+15%", "skills": [{ "id": "convoy", "cd": 75, "mana": 40, "food": 250, "repair": 350 }, { "id": "fortify", "cd": 120, "mana": 60 }] },
+    { "id": "ranger", "name": "Следопыт", "stats": { "str": 5, "adm": 5, "spi": 8 }, "aura": "vision+30%", "skills": [{ "id": "ambush", "cd": 60, "mana": 35, "dur": 12 }, { "id": "mark", "cd": 50, "mana": 45, "mult": 1.3 }] }
+  ],
+  "xpCurve": "100 * level^1.5",
+  "maxLevel": 30,
+  "gearSlots": ["weapon", "armor", "mount", "amulet"]
+}

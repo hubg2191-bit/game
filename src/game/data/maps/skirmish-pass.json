@@ -1,0 +1,19 @@
+{
+  "id": "skirmish_pass_v1",
+  "name": "Горный перевал",
+  "size_m": 1536,
+  "tile_m": 4,
+  "spawns": [
+    { "team": 0, "x": 250, "z": 250 }, { "team": 1, "x": 1286, "z": 250 },
+    { "team": 2, "x": 250, "z": 1286 }, { "team": 3, "x": 1286, "z": 1286 }
+  ],
+  "provinces": [
+    { "id": "plateau", "x": 768, "z": 768, "type": "ruins", "buff": "all+5%", "capSec": 120, "h": 8 },
+    { "id": "hill_w", "x": 450, "z": 768, "type": "hill", "buff": "iron+15%", "capSec": 120 },
+    { "id": "hill_e", "x": 1086, "z": 768, "type": "hill", "buff": "iron+15%", "capSec": 120 }
+  ],
+  "passages": [{ "x": 768, "z": 500, "width": 6 }, { "x": 768, "z": 1036, "width": 6 }],
+  "camps": [{ "type": "wolves", "x": 500, "z": 600 }, { "type": "wolves", "x": 1036, "z": 936 }],
+  "winScore": 1000,
+  "ffa": true
+}

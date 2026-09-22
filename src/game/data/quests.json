@@ -1,0 +1,19 @@
+{
+  "version": "0.1",
+  "dailies": [
+    { "id": "lumber", "name": "Лесоруб", "need": 1000, "res": "wood", "gold": 100, "xp": 150 },
+    { "id": "bread", "name": "Хлеб", "need": 800, "res": "food", "gold": 100, "xp": 150 },
+    { "id": "patrol", "name": "Патруль", "need": 20, "res": "neutrals_killed", "gold": 100, "xp": 150 },
+    { "id": "flag", "name": "Флагоносец", "needSec": 300, "gold": 100, "xp": 150 },
+    { "id": "skirmish2", "name": "Схватка x2", "need": 2, "gold": 100, "xp": 150, "minOrders": 50 }
+  ],
+  "weeklies": [
+    { "id": "conqueror", "name": "Завоеватель", "need": "3 prov 10 min", "gold": 400, "xp": 600 },
+    { "id": "duelist", "name": "Дуэлянт", "need": "3 wins", "gold": 400, "xp": 600 }
+  ],
+  "heroQuests": [
+    { "hero": "warlord", "id": "kill30", "need": 30, "gold": 100, "xp": 200 },
+    { "hero": "ranger", "id": "marks5", "need": 5, "gold": 100, "xp": 200 },
+    { "hero": "steward", "id": "build3", "need": 3, "gold": 100, "xp": 200 }
+  ]
+}
