@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WORLD_SCALE, isVisible, teamOf, sameTeam } from './sim.js';
+import { UnitsMesh } from './unitsMesh.js';
+import { HeroMesh } from './heroMesh.js';
 
 function canvasTexture(size, draw) {
   const c = document.createElement('canvas');
@@ -19,13 +21,29 @@ export class GameRender {
     this.worldSize = state.map.size_m * WORLD_SCALE;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0e1420);
-    this.scene.fog = new THREE.Fog(0x0e1420, 220, 520);
+    this.scene.background = new THREE.Color(0x1a2436);
+    this.scene.fog = new THREE.Fog(0x1a2436, 260, 620);
 
-    this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 2000);
+    // 2.5D лок: орто-изометрия 45°, без вращения (style-lock.md)
+    const frustum = 150;
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 2000);
+    this.frustum = frustum;
     const s0 = state.map.spawns[0];
     this.home = { x: s0.x * WORLD_SCALE, z: s0.z * WORLD_SCALE };
-    this.camera.position.set(this.home.x, 55, this.home.z + 60);
+    // направление взгляда: азимут 45° (3/4 вид), элевация 45°
+    const az = Math.PI / 4;
+    const el = Math.PI / 4;
+    const dist = 300;
+    this.isoDir = new THREE.Vector3(
+      Math.cos(el) * Math.cos(az),
+      Math.sin(el),
+      Math.cos(el) * Math.sin(az)
+    );
+    this.camera.position.set(
+      this.home.x + this.isoDir.x * dist,
+      this.isoDir.y * dist,
+      this.home.z + this.isoDir.z * dist
+    );
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -33,15 +51,16 @@ export class GameRender {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(this.home.x, 0, this.home.z);
-    this.controls.maxPolarAngle = THREE.MathUtils.degToRad(60);
-    this.controls.minPolarAngle = THREE.MathUtils.degToRad(20);
-    this.controls.minDistance = 12;
-    this.controls.maxDistance = 260;
+    this.controls.enableRotate = false; // вращения нет
+    this.controls.minZoom = 0.45;
+    this.controls.maxZoom = 2.6;
     this.controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     this.controls.update();
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-    const sun = new THREE.DirectionalLight(0xfff2d9, 1.6);
+    // тёплый свет Townsmen: сцена была темной
+    this.scene.add(new THREE.AmbientLight(0xfff4e0, 1.15));
+    this.scene.add(new THREE.HemisphereLight(0xbdd7ff, 0x8a7a5a, 0.55));
+    const sun = new THREE.DirectionalLight(0xffe7c4, 2.4);
     sun.position.set(120, 180, 60);
     this.scene.add(sun);
 
@@ -51,7 +70,6 @@ export class GameRender {
     this.scene.add(this.dyn);
 
     this.bMeshes = new Map(); // buildingId -> group
-    this.sMeshes = new Map(); // squadId -> group
     this.fMeshes = new Map(); // flagId -> {flagMat, ringMat}
     this.rings = new Map(); // entityKey -> ring mesh
     this.barsLayer = document.createElement('div');
@@ -59,7 +77,17 @@ export class GameRender {
     container.appendChild(this.barsLayer);
     this.barEls = new Map();
 
-    this.soldierGeo = new THREE.CapsuleGeometry(0.35, 0.8, 3, 8);
+    // солдаты рисуются инстансингом (unitsMesh.js), герои — ригами (heroMesh.js)
+    this.units = new UnitsMesh(this.scene, palette);
+    this.heroMesh = new HeroMesh(this.scene);
+    this.teamHexOf = (owner) => {
+      const m = {
+        player: palette.teams.p0, ally: palette.teams.p2,
+        enemy1: palette.teams.p1, enemy2: palette.teams.p2, enemy3: palette.teams.p3,
+        bot: palette.teams.p1, neutral: 0x777777,
+      };
+      return m[owner] ?? 0xffffff;
+    };
     this.teamMats = {};
     for (const [k, hex] of Object.entries(palette.teams)) {
       this.teamMats[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.8 });
@@ -428,73 +456,6 @@ export class GameRender {
     }
   }
 
-  syncSquad(s) {
-    let g = this.sMeshes.get(s.id);
-    if (!g) {
-      g = new THREE.Group();
-      const mat = this.teamMat(s.owner);
-      for (const sol of s.soldiers) {
-        const mesh = new THREE.Mesh(this.soldierGeo, mat);
-        mesh.position.set(sol.dx, 0.9, sol.dz);
-        mesh.userData.entity = { kind: 'squad', id: s.id };
-        g.add(mesh);
-      }
-      if (s.type === 'hero') {
-        // герой в 1.5 раза крупнее + золотая метка (leveling-gear.md вид)
-        g.scale.setScalar(1.45);
-        const crown = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.5),
-          new THREE.MeshBasicMaterial({ color: 0xffd76a })
-        );
-        crown.position.y = 2.6;
-        g.userData.crown = crown;
-        g.add(crown);
-        const auraR = s.hero ? 5.5 : 5.5;
-        const aura = new THREE.Mesh(
-          new THREE.RingGeometry(auraR - 0.3, auraR, 48),
-          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
-        );
-        aura.rotation.x = -Math.PI / 2;
-        aura.position.y = 0.12;
-        g.userData.aura = aura;
-        g.add(aura);
-      }
-      this.dyn.add(g);
-      this.sMeshes.set(s.id, g);
-    }
-    g.position.set(s.x, 0, s.z);
-    g.visible = isVisible(this.state, s);
-    g.rotation.y = s.face || 0;
-    if (g.userData.crown) g.userData.crown.rotation.y += 0.03;
-    if (g.userData.aura) {
-      const me = this.state.me || 'player';
-      g.userData.aura.visible = s.owner === me || sameTeam(this.state, s.owner, me);
-    }
-    // засада: полупрозрачность (материалы клонируем один раз)
-    const ghost = (s.invisT || 0) > 0;
-    if (ghost !== !!g.userData.ghost) {
-      g.userData.ghost = ghost;
-      for (const child of g.children) {
-        if (!child.isMesh || child === g.userData.crown || child === g.userData.aura) continue;
-        if (ghost && !child.userData.ownMat) {
-          child.material = child.material.clone();
-          child.userData.ownMat = true;
-        }
-        if (child.userData.ownMat) {
-          child.material.transparent = ghost;
-          child.material.opacity = ghost ? 0.35 : 1;
-        }
-      }
-    }
-    // рассыпной строй — бойцы шире
-    const spread = s.loose ? 2 : 1;
-    let i = 0;
-    for (const child of g.children) {
-      const sol = s.soldiers[i++];
-      child.visible = !!(sol && sol.alive);
-      if (sol) child.position.set(sol.dx * spread, 0.9, sol.dz * spread);
-    }
-  }
 
   consumeShots(state) {
     if (!state.shots) return;
@@ -530,7 +491,8 @@ export class GameRender {
     }
   }
 
-  syncRings(sel) {    const want = new Set();
+  syncRings(state, sel) {
+    const want = new Set();
     for (const id of sel.squads) want.add(`squad:${id}`);
     if (sel.building) want.add(`building:${sel.building}`);
     for (const [key, ring] of this.rings) {
@@ -550,11 +512,15 @@ export class GameRender {
         this.rings.set(key, ring);
       }
       const [kind, id] = key.split(':');
-      const g = kind === 'squad' ? this.sMeshes.get(Number(id)) : this.bMeshes.get(Number(id));
-      if (g) {
+      const g = kind === 'squad'
+        ? state.squads.find((x) => x.id === Number(id))
+        : this.bMeshes.get(Number(id));
+      if (g && (kind !== 'squad' || g.count > 0)) {
         ring.visible = true;
-        ring.position.set(g.position.x, 0.15, g.position.z);
-        const s = kind === 'squad' ? 1.6 : 2.6;
+        const gx = kind === 'squad' ? g.x : g.position.x;
+        const gz = kind === 'squad' ? g.z : g.position.z;
+        ring.position.set(gx, 0.15, gz);
+        const s = kind === 'squad' ? (g.type === 'hero' ? 2.4 : 1.6) : 2.6;
         ring.scale.setScalar(s);
       } else {
         ring.visible = false;
@@ -618,20 +584,11 @@ export class GameRender {
         this.bMeshes.delete(id);
       }
     }
-    // отряды
-    const sIds = new Set();
-    for (const s of state.squads) {
-      sIds.add(s.id);
-      this.syncSquad(s);
-    }
-    for (const [id, g] of this.sMeshes) {
-      if (!sIds.has(id)) {
-        this.dyn.remove(g);
-        this.sMeshes.delete(id);
-      }
-    }
+    // отряды: инстансинг + риги героев
+    this.units.sync(state, this.camera, state.t, (st, e) => isVisible(st, e), this.controls.target);
+    this.heroMesh.sync(state, state.t, dt, (st, e) => isVisible(st, e), (o) => this.teamHexOf(o));
     this.syncFlags(state);
-    this.syncRings(sel);
+    this.syncRings(state, sel);
     this.syncMarks(state);
     this.syncPings(state);
     this.syncBars(state, null);
@@ -660,8 +617,37 @@ export class GameRender {
   pick(ndc) {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(ndc, this.camera);
-    const hits = rc.intersectObjects(this.dyn.children, true);
+    // здания (обычные меши) + солдаты (инстансинг)
+    const unitMeshes = [];
+    for (const pool of Object.values(this.units.pools)) {
+      if (pool.team) unitMeshes.push(pool.team);
+      if (pool.fixed) unitMeshes.push(pool.fixed);
+    }
+    unitMeshes.push(this.units.lod);
+    const hits = rc.intersectObjects([...this.dyn.children, ...unitMeshes], true);
+    // инстансы ближе? сортируем по дистанции
+    hits.sort((a, b) => a.distance - b.distance);
     for (const h of hits) {
+      // попадание в инстанс солдата
+      if (h.instanceId !== undefined && h.object !== this.units.lod) {
+        const sqId = this.units.squadAt(h.object, h.instanceId);
+        if (sqId != null) {
+          const target = this.state.squads.find((x) => x.id === sqId);
+          if (target && target.count > 0) {
+            if (teamOf(this.state, target.owner) !== 'A' && !isVisible(this.state, target)) continue;
+            return { kind: 'squad', id: sqId };
+          }
+        }
+        continue;
+      }
+      if (h.instanceId !== undefined && h.object === this.units.lod) {
+        const sqId = this.units.squadAt(h.object, h.instanceId);
+        if (sqId != null) {
+          const target = this.state.squads.find((x) => x.id === sqId);
+          if (target && target.count > 0) return { kind: 'squad', id: sqId };
+        }
+        continue;
+      }
       let o = h.object;
       while (o && !o.userData.entity) o = o.parent;
       if (!o) continue;
@@ -682,10 +668,27 @@ export class GameRender {
     return hit.length ? hit[0].point : null;
   }
 
+  // Фокус с сохранением изометрии: камера едет по лучу
+  focus(x, z, dist = null) {
+    const d = dist || this.camera.position.distanceTo(this.controls.target);
+    this.controls.target.set(x, 0, z);
+    this.camera.position.set(
+      x + this.isoDir.x * d,
+      this.isoDir.y * d,
+      z + this.isoDir.z * d
+    );
+    this.controls.update();
+  }
+
   resize() {
     const w = this.renderer.domElement.parentElement.clientWidth || innerWidth;
     const h = this.renderer.domElement.parentElement.clientHeight || innerHeight;
-    this.camera.aspect = w / h;
+    const half = (this.frustum || 150) / 2;
+    const a = w / h;
+    this.camera.left = -half * a;
+    this.camera.right = half * a;
+    this.camera.top = half;
+    this.camera.bottom = -half;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   }

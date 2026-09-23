@@ -3,7 +3,7 @@ import './style.css';
 import * as THREE from 'three';
 import {
   createGame, update, orderMove, orderAttack, recruit, construct, upgrade, trade, castSkill,
-  setDirective, giveAlly, forgeUpgrade, formationOffsets,
+  setDirective, giveAlly, forgeUpgrade, formationOffsets, addSquad,
   SIM_TICK_HZ, WORLD_SCALE, DIFFS, teamOf, defOf, heroOf,
 } from './game/sim.js';
 import { NetClient, getWssUrl } from './game/net.js';
@@ -85,8 +85,31 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   }
   const state = createGame(map.data, unitsData, buildingsData, rules, racesData, cfg);
   window.__state = state;
+  if (import.meta.env.DEV) {
+    // перф-харнес: спавн толпы + чтение renderer.info (pipeline.md приёмка)
+    window.__debug = {
+      state, render: null,
+      spawnCrowd(n = 2000) {
+        const types = ['militia', 'swords', 'spears', 'archers'];
+        let placed = 0;
+        let k = 0;
+        while (placed < n) {
+          const type = types[k % types.length];
+          const owner = k % 2 ? 'bot' : 'player';
+          addSquad(state, owner, type, 150 + (k % 40) * 3, 150 + Math.floor(k / 40) * 3);
+          placed += 24;
+          k++;
+        }
+      },
+      stats() {
+        const r = window.__debug.render;
+        return r ? { calls: r.renderer.info.render.calls, tris: r.renderer.info.render.triangles } : null;
+      },
+    };
+  }
   if (mission) setupMission(state, mission.id);
   const render = new GameRender(sceneEl, state, palette);
+  if (window.__debug) window.__debug.render = render;
   const sel = { squads: [], building: null };
   const groups = {};
   let buildMode = null;
@@ -160,15 +183,19 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
         ui.pendingSkill = null;
         return;
       }
-      if (sk.id === 'ambush' || sk.id === 'mark') {
-        // прицельные: следующий клик — цель
+      if (['ambush', 'mark', 'poison_blades', 'fireball', 'roots'].includes(sk.id)) {
+        // прицельные: следующий клик — цель (или земля для корней/фаербола)
         if (h.hero[slot === 'q' ? 'qCd' : 'eCd'] <= 0 && h.hero.mana >= sk.mana) {
           pendingSkill = slot;
           ui.pendingSkill = slot;
         }
         return;
       }
-      if (castSkill(state, 'player', h.id, slot)) record('skill', ['player', h.id, slot, null]);
+      if (castSkill(state, 'player', h.id, slot)) {
+        h.castT = 0.6;
+        h.castSlot = slot;
+        record('skill', ['player', h.id, slot, null]);
+      }
     },
   });
 
@@ -255,11 +282,18 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
         // Alt+клик — пинг атаки союзнику (controls.md)
         setDirective(state, { kind: 'attack', x: pt.x, z: pt.z });
         record('directive', [{ kind: 'attack', x: pt.x, z: pt.z }]);
-      } else if (pendingSkill && ent) {
-        // прицельный скилл героя
+      } else if (pendingSkill && (ent || pt)) {
+        // прицельный скилл героя (сущность или земля для корней/фаербола)
         const h = heroAlive();
-        if (h && castSkill(state, 'player', h.id, pendingSkill, ent)) {
-          record('skill', ['player', h.id, pendingSkill, ent]);
+        if (h) {
+          const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
+          const sk = H.skills[pendingSkill === 'q' ? 0 : 1];
+          const tgt = ent || (sk.point && pt ? { x: pt.x, z: pt.z } : null);
+          if (tgt && castSkill(state, 'player', h.id, pendingSkill, tgt)) {
+            h.castT = 0.6;
+            h.castSlot = pendingSkill;
+            record('skill', ['player', h.id, pendingSkill, tgt]);
+          }
         }
         pendingSkill = null;
         ui.pendingSkill = null;
@@ -372,14 +406,14 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       const th = state.buildings.find((b) => b.owner === 'player' && b.type === 'townhall' && b.hp > 0);
       if (th) {
         render.controls.target.set(th.x, 0, th.z);
-        render.camera.position.set(th.x, 55, th.z + 60);
+        render.focus(th.x, th.z);
       }
     }
     if (e.code === 'Space') {
       e.preventDefault();
       if (state.lastCombat) {
         render.controls.target.set(state.lastCombat.x, 0, state.lastCombat.z);
-        render.camera.position.set(state.lastCombat.x, 55, state.lastCombat.z + 60);
+        render.focus(state.lastCombat.x, state.lastCombat.z);
       }
     }
     const digit = e.code.match(/^Digit([0-9])$/);
@@ -803,7 +837,7 @@ async function startOnline(lobbyCfg, meta) {
       if (!h) return;
       const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
       const sk = H.skills[slot === 'q' ? 0 : 1];
-      if (['ambush', 'mark'].includes(sk.id)) {
+      if (['ambush', 'mark', 'poison_blades', 'fireball', 'roots'].includes(sk.id)) {
         pendingSkill = slot;
         ui.pendingSkill = slot;
         return;
@@ -891,11 +925,16 @@ async function startOnline(lobbyCfg, meta) {
     } else {
       const pt = render.groundPoint(ndcOf(e, render.renderer));
       const ent = render.pick(ndcOf(e, render.renderer));
-      if (pendingSkill && ent) {
+      if (pendingSkill && (ent || pt)) {
         const h = view.squads.find((s) => s.owner === me() && s.type === 'hero' && s.count > 0);
         if (h && throttle()) {
-          net.cmd({ cmd: 'cast', slot: pendingSkill, hero: h.id, target: ent.id, kind: ent.kind });
-          ordersSent++;
+          const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
+          const sk = H.skills[pendingSkill === 'q' ? 0 : 1];
+          const tgt = ent ? { kind: ent.kind, id: ent.id } : sk.point && pt ? { x: pt.x, z: pt.z } : null;
+          if (tgt) {
+            net.cmd({ cmd: 'cast', slot: pendingSkill, hero: h.id, target: tgt.id ?? tgt, kind: tgt.kind });
+            ordersSent++;
+          }
         }
         pendingSkill = null;
         ui.pendingSkill = null;
@@ -959,7 +998,7 @@ async function startOnline(lobbyCfg, meta) {
       const th = view.buildings.find((b) => b.owner === me() && b.type === 'townhall' && b.hp > 0);
       if (th) {
         render.controls.target.set(th.x, 0, th.z);
-        render.camera.position.set(th.x, 55, th.z + 60);
+        render.focus(th.x, th.z);
       }
     }
     if (e.code === 'F1' || e.code === 'F2' || e.code === 'F4') {
@@ -1184,7 +1223,7 @@ async function startObserve(roomId) {
         keys[e.code] = true;
         if (e.code === 'KeyH') {
           render.controls.target.set(192, 0, 192);
-          render.camera.position.set(192, 80, 260);
+          render.focus(192, 192);
         }
       };
       const onKeyUp = (e) => (keys[e.code] = false);

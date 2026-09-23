@@ -127,9 +127,10 @@ export function applyCmd(state, pid, msg) {
     case 'cast': {
       const h = state.squads.find((s) => s.owner === pid && s.type === 'hero' && s.count > 0);
       if (!h) return false;
-      const tgt = msg.target != null
-        ? { kind: msg.kind === 'building' ? 'building' : 'squad', id: msg.target }
-        : null;
+      const raw = msg.target;
+      const tgt = raw == null ? null
+        : (typeof raw.x === 'number' && !raw.kind) ? { x: raw.x, z: raw.z }
+        : { kind: raw.kind === 'building' ? 'building' : 'squad', id: raw.id };
       return sim.castSkill(state, pid, h.id, msg.slot, tgt);
     }
     case 'ping': {

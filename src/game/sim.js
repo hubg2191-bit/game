@@ -113,8 +113,10 @@ export function unitById(unitsData, id) {
   return unitsData.squads.find((u) => u.id === id);
 }
 // def отряда по типу с учётом нейтралов (их нет в units.json) и героев (статы из меты)
+const RAISED_DEF = { id: 'raised', name: 'Скелеты', size: 12, hpPer: 40, dmg: 6, armor: 'light', speed: 4.0, range: 0 };
 export function defOf(state, type, owner) {
   if (type === 'hero') return state.heroStats?.[owner];
+  if (type === 'raised') return RAISED_DEF;
   if (owner === 'neutral') return NEUTRAL_DEFS[type];
   return unitById(state.units, type);
 }
@@ -172,8 +174,7 @@ export function formationOffsets(n) {  const offs = [];
   return offs;
 }
 
-function addSquad(state, owner, typeId, x, z, opts = {}) {
-  const def = opts.def || unitById(state.units, typeId);
+export function addSquad(state, owner, typeId, x, z, opts = {}) {  const def = opts.def || unitById(state.units, typeId);
   // кузница ур.1: +10% HP пехоты при найме
   let hpScale = 1;
   if (!opts.def && INFANTRY_IDS.has(typeId) && (state.upgrades?.[owner]?.forge || 0) >= 1) hpScale = 1.1;
@@ -704,13 +705,120 @@ export function castSkill(state, pid, heroId, slot, targetRef = null) {
       state.quest.marks += 1;
       ok = true;
     }
+  } else if (sk.id === 'sacred_shield') {
+    for (const s of ownSquadsIn(sk.radius)) s.protT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'healing_light') {
+    for (const s of ownSquadsIn(sk.radius)) {
+      if (s.hp >= s.hpCap) continue;
+      const def = defOf(state, s.type, s.owner);
+      s.hp = Math.min(s.hpCap, s.hp + (sk.heal || 120));
+      s.count = Math.max(s.count, Math.ceil(s.hp / def.hpPer));
+    }
+    ok = true;
+  } else if (sk.id === 'roots') {
+    const pt = pointRef(state, targetRef, h, sk.radius);
+    if (pt) {
+      for (const s of state.squads) {
+        if (s.count <= 0 || sameTeam(state, s.owner, pid)) continue;
+        if (Math.hypot(s.x - pt.x, s.z - pt.z) <= 5) s.rootT = sk.dur;
+      }
+      ok = true;
+    }
+  } else if (sk.id === 'forest_song') {
+    for (const s of ownSquadsIn(sk.radius)) {
+      s.hp = Math.min(s.hpCap, s.hp + (sk.heal || 80));
+      s.mor = Math.min(100, s.mor + (sk.morale || 15));
+    }
+    ok = true;
+  } else if (sk.id === 'savage_rush') {
+    for (const s of ownSquadsIn(sk.radius)) {
+      s.rushT = sk.dur;
+      s.savageT = sk.dur;
+    }
+    h.savageT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'fury') {
+    for (const s of ownSquadsIn(H.base.auraR)) s.furyT = sk.dur;
+    h.furyT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'smoke') {
+    for (const s of ownSquadsIn(sk.radius)) s.invisT = sk.dur;
+    h.invisT = sk.dur;
+    ok = true;
+  } else if (sk.id === 'poison_blades') {
+    const t = targetRef ? targetPos(state, targetRef) : null;
+    h.poisonT = sk.dur;
+    if (t && t.count !== undefined && t.owner === pid && inR(t.x, t.z, sk.radius)) {
+      t.poisonT = sk.dur;
+    }
+    ok = true;
+  } else if (sk.id === 'curse') {
+    for (const s of state.squads) {
+      if (s.count <= 0 || sameTeam(state, s.owner, pid)) continue;
+      if (!inR(s.x, s.z, sk.radius)) continue;
+      s.markT = sk.dur; // метка x1.3 как база
+      s.mor = Math.max(0, s.mor - 10);
+      s.curseT = sk.dur;
+    }
+    ok = true;
+  } else if (sk.id === 'raise') {
+    const alive = state.squads.some((s) => s.owner === pid && s.type === 'raised' && s.count > 0);
+    if (!alive) {
+      const q = addSquad(state, pid, 'raised', h.x + 3, h.z + 3, {
+        def: { id: 'raised', name: 'Скелеты', size: sk.size || 12, hpPer: sk.hpPer || 40, dmg: sk.dmg || 6, armor: 'light', speed: 4.0, range: 0 },
+      });
+      q.tempT = sk.dur || 60;
+      recalcPop(state);
+      ok = true;
+    }
+  } else if (sk.id === 'fireball') {
+    const pt = pointRef(state, targetRef, h, sk.range || 7.5);
+    if (pt) {
+      aoeStrike(state, { ...h, type: '__blast', dmg: sk.dmg || 90 }, pt.x, pt.z, sk.aoe || 1.25, { dur: 4, dps: sk.burn || 10 });
+      // здания x1.5 от поджога
+      for (const b of state.buildings) {
+        if (b.hp <= 0 || sameTeam(state, b.owner, pid)) continue;
+        if (Math.hypot(b.x - pt.x, b.z - pt.z) <= m(sk.aoe || 1.25)) b.hp -= (sk.dmg || 90) * 0.5;
+      }
+      state.shots = state.shots || [];
+      state.shots.push({ x1: h.x, z1: h.z, x2: pt.x, z2: pt.z, t: 0.4, from: pid });
+      ok = true;
+    }
+  } else if (sk.id === 'frost_nova') {
+    for (const s of state.squads) {
+      if (s.count <= 0 || sameTeam(state, s.owner, pid)) continue;
+      if (!inR(s.x, s.z, sk.radius)) continue;
+      s.slowT = sk.dur;
+    }
+    ok = true;
   }
   if (!ok) return false;
-  h.hero.mana -= sk.mana;
+  // Перегрев мага: каждое 3-е заклинание бесплатно
+  h.hero.casts = (h.hero.casts || 0) + 1;
+  const free = h.hero.arch === 'mage' && h.hero.casts % 3 === 0;
+  if (!free) h.hero.mana -= sk.mana;
   if (slot === 'q') h.hero.qCd = sk.cd;
   else h.hero.eCd = sk.cd;
+  // анимация каста для рендера (вне симуляции)
+  h.castT = 0.6;
+  h.castSlot = slot;
   event(state, `${H.name}: ${sk.name}!`, 'combat');
   return true;
+}
+// Точка каста: сущность или земля в радиусе
+function pointRef(state, targetRef, h, radius) {
+  if (!targetRef) return null;
+  if (targetRef.kind) {
+    const t = targetPos(state, targetRef);
+    if (!t) return null;
+    if (Math.hypot(t.x - h.x, t.z - h.z) > radius) return null;
+    return { x: t.x, z: t.z };
+  }
+  if (typeof targetRef.x === 'number' && Math.hypot(targetRef.x - h.x, targetRef.z - h.z) <= radius) {
+    return { x: targetRef.x, z: targetRef.z };
+  }
+  return null;
 }
 export function tradeRate(state, pid) {
   const p = state.players[pid];
@@ -743,7 +851,7 @@ function nearestEnemy(state, s, range) {
   let bestD = range * range;
   for (const o of state.squads) {
     if (o.owner === s.owner || sameTeam(state, o.owner, s.owner) || o.count <= 0) continue;
-    if (o.invisT > 0) continue; // засада: не видят
+    if (o.invisT > 0 || o.stealthHide) continue; // засада/стелс: не видят
     const d = (o.x - s.x) ** 2 + (o.z - s.z) ** 2;
     if (d < bestD) { bestD = d; best = { kind: 'squad', id: o.id }; }
   }
@@ -766,14 +874,21 @@ function angDiff(a, b) {
   let d = Math.abs(a - b) % (Math.PI * 2);
   return d > Math.PI ? Math.PI * 2 - d : d;
 }
-// Фланг v0.2: атакующий за спиной цели (противоположно её взгляду) — x2, сбоку — x1.5
+// Фланг v0.2: атакующий за спиной цели (противоположно её взгляду) — x2, сбоку — x1.5.
+// Со спины разбойника: +0.3 своим рядом.
 export function flankMultOf(state, src, e) {
   if (e.face === undefined || e.count === undefined) return 1; // здания без фланга
   const toSrc = Math.atan2(src.x - e.x, src.z - e.z);
   const d = angDiff(toSrc, e.face);
-  if (d > (2 * Math.PI) / 3) return state.rules.flankRear ?? 2.0;
-  if (d > Math.PI / 3) return state.rules.flankSide ?? 1.5;
-  return 1;
+  let mult = 1;
+  if (d > (2 * Math.PI) / 3) mult = state.rules.flankRear ?? 2.0;
+  else if (d > Math.PI / 3) mult = state.rules.flankSide ?? 1.5;
+  if (mult > 1) {
+    const rh = heroOf(state, src.owner);
+    if (rh && rh.hero.arch === 'rogue' && src.id !== rh.id
+      && Math.hypot(src.x - rh.x, src.z - rh.z) <= 4.5) mult += 0.3;
+  }
+  return mult;
 }
 export function inForest(state, x, z) {
   return state.forests.some((f) => (x - f.x) ** 2 + (z - f.z) ** 2 < f.r * f.r);
@@ -865,10 +980,10 @@ function collideWalls(state, s) {
     }
   }
 }
-// Удар по площади (требушет): своим — 50% дружурон, рассыпному строю — 50% (05-units)
-function aoeStrike(state, s, tx, tz) {
+// Удар по площади (требушет/маг): своим — 50% дружурон, рассыпному строю — 50% (05-units)
+function aoeStrike(state, s, tx, tz, radiusM = null, dot = null) {
   const def = defOf(state, s.type, s.owner);
-  const R = m(def.aoeR || 6);
+  const R = m(radiusM ?? def.aoeR ?? def.aoe ?? 6);
   for (const v of state.squads) {
     if (v.count <= 0 || v.id === s.id) continue;
     const d = Math.hypot(v.x - tx, v.z - tz);
@@ -878,6 +993,10 @@ function aoeStrike(state, s, tx, tz) {
     let mult = own ? 0.5 : 1;
     if (v.loose) mult *= 0.5;
     dealDamage(state, s, { kind: 'squad', id: v.id }, mult);
+    if (dot && v.count > 0) {
+      v.dotT = dot.dur;
+      v.dotDps = dot.dps;
+    }
   }
 }
 // Бонус баллисты МК-II Лиги при живой Гильдии (+20% урон, +5м дальность)
@@ -887,7 +1006,7 @@ function siegeBonus(state, s) {
   const guild = state.buildings.some((b) => b.owner === s.owner && b.type === 'guild_league' && b.hp > 0 && b.buildT <= 0);
   return league && guild ? { dmg: 1.2, range: m(5) } : { dmg: 1, range: 0 };
 }
-// Эффективная мораль: база + аура храма/холла/воеводы (+10 рядом) + запах хлеба
+// Эффективная мораль: база + ауры своих + запах хлеба − ауры страха врагов
 export function effMor(state, s) {
   let m = s.mor;
   if (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA)) m += 10;
@@ -897,6 +1016,17 @@ export function effMor(state, s) {
     && Math.hypot(s.x - wh.x, s.z - wh.z) <= 5.5) m += 10;
   if (s.type === 'hero' && s.hero) m += s.hero.gearMorale || 0;
   if (state.players[s.owner]?.townMor) m += state.players[s.owner].townMor;
+  // вражеские ауры страха: варвар/некромант −5, фобия −10 ополчению
+  for (const q of state.squads) {
+    if (q.type !== 'hero' || q.count <= 0 || !q.hero) continue;
+    if (sameTeam(state, q.owner, s.owner)) continue;
+    const d = Math.hypot(s.x - q.x, s.z - q.z);
+    if (q.hero.arch === 'barbarian' && d <= 5) m -= 5;
+    if (q.hero.arch === 'necromancer' && d <= 5.5) {
+      m -= 5;
+      if (s.type === 'militia') m -= 10;
+    }
+  }
   return m;
 }
 export function sightOf(state, b) {
@@ -917,10 +1047,31 @@ export function sightOf(state, b) {
   return SIGHT.building;
 }
 
+// Урон в общий пул HP отряда: смерти, мораль, hpCap. src нужен для статистики/морали фланга.
+function applyPoolDamage(state, e, dmg, src, fm = 1) {
+  const before = e.count;
+  e.hp -= dmg;
+  e.lastDmgT = state.t;
+  const per = defOf(state, e.type, e.owner).hpPer;
+  e.count = Math.max(0, Math.ceil(e.hp / per));
+  const deaths = before - e.count;
+  if (deaths > 0) {
+    // v0.2: -2 морали за тело, -3 за фланговый удар
+    e.mor = Math.max(0, e.mor - deaths * 2 - (fm > 1 ? 3 : 0));
+    let aliveIdx = 0;
+    for (const sol of e.soldiers) {
+      if (sol.alive) {
+        aliveIdx++;
+        if (aliveIdx > e.count) sol.alive = false;
+      }
+    }
+    e.hpCap = e.count * per;
+  }
+}
+
 function dealDamage(state, src, target, mult = 1) {
   const e = targetPos(state, target);
-  if (!e) return;
-  // src: {type} для отрядов (урон из data) или {dmg} для башен
+  if (!e) return;  // src: {type} для отрядов (урон из data) или {dmg} для башен
   const def = src.type && src.type !== '__tower' ? defOf(state, src.type, src.owner) : null;
   const baseDmg = def ? def.dmg : src.dmg || 10;
   // залп отряда: бьёт каждый живой боец (combat-v02: DPS = dmg*size/interval)
@@ -939,8 +1090,14 @@ function dealDamage(state, src, target, mult = 1) {
     const eDef = defOf(state, e.type, e.owner);
     if (def.bonusVsHeavy && eDef.armor === 'heavy') dmg *= def.bonusVsHeavy;
     // резисты к стрелам (combat-v02 EHP): medium 0.85, heavy 0.7; кузница ур.3: ещё 0.9 пехоте
-    if (srcRanged && eDef.armor === 'medium') dmg *= 0.85;
-    if (srcRanged && eDef.armor === 'heavy') dmg *= 0.7;
+    // проклятие: броня на тир ниже
+    let armor = eDef.armor;
+    if (e.curseT > 0) {
+      if (armor === 'heavy') armor = 'medium';
+      else if (armor === 'medium') armor = 'light';
+    }
+    if (srcRanged && armor === 'medium') dmg *= 0.85;
+    if (srcRanged && armor === 'heavy') dmg *= 0.7;
     if (srcRanged && INFANTRY_IDS.has(e.type) && (state.upgrades?.[e.owner]?.forge || 0) >= 3) dmg *= 0.9;
   }
   // кузница ур.2: +10% урон пехоты
@@ -950,6 +1107,7 @@ function dealDamage(state, src, target, mult = 1) {
   const fm = e.count !== undefined ? flankMultOf(state, src, e) : 1;
   dmg *= fm;
   // аура воеводы: +5% урона ближним рядом + Полководец (пассив): +5% за пару отрядов рядом, макс +15%
+  // Клич войны варвара +8%, Возмездие паладина стаками — ниже
   if (def && (def.range || 0) === 0 && e.count !== undefined) {
     const wh = heroOf(state, src.owner);
     if (wh && wh.hero.arch === 'warlord' && Math.hypot(src.x - wh.x, src.z - wh.z) <= 5.5) {
@@ -964,33 +1122,54 @@ function dealDamage(state, src, target, mult = 1) {
         dmg *= 1 + Math.min(cmd.max || 0.15, (cmd.perPair || 0.05) * Math.floor(n / 2));
       }
     }
+    const bh = heroOf(state, src.owner);
+    if (bh && bh.hero.arch === 'barbarian' && src.id !== bh.id
+      && Math.hypot(src.x - bh.x, src.z - bh.z) <= 5) {
+      dmg *= 1.08;
+    }
+    const ph = heroOf(state, src.owner);
+    if (ph && ph.hero.arch === 'paladin' && (ph.hero.retrib || 0) > 0 && src.id !== ph.id
+      && Math.hypot(src.x - ph.x, src.z - ph.z) <= 5.5) {
+      dmg *= 1 + ph.hero.retrib;
+    }
+  }
+  // Вскрытие разбойника: +50% по осадным и стенам
+  if (src.type === 'hero' && (e.type === 'wall' || e.type === 'ballista' || e.type === 'trebuchet')) {
+    const rh = heroOf(state, src.owner);
+    if (rh && rh.id === src.id && rh.hero.arch === 'rogue') dmg *= 1.5;
+  }
+  // Тлен некроманта: +10% входящего врагам рядом
+  if (e.type !== undefined) {
+    for (const q of state.squads) {
+      if (q.type !== 'hero' || q.count <= 0 || !q.hero || q.hero.arch !== 'necromancer') continue;
+      if (sameTeam(state, q.owner, e.owner)) continue;
+      if (Math.hypot(e.x - q.x, e.z - q.z) <= 5.5) {
+        dmg *= 1.1;
+        break;
+      }
+    }
   }
   // атака снимает засаду
   if (src.invisT) src.invisT = 0;
   if (onHill(state, src.x, src.z)) dmg *= 1 + (state.rules.heightBonus ?? 0.15);
+  // священный щит паладина: -40% входящего
+  if (e.protT > 0) dmg *= 0.6;
   if (e.hp !== undefined && e.count !== undefined) {
-    // отряд: урон в общий пул HP
-    const before = e.count;
-    e.hp -= dmg;
-    e.lastDmgT = state.t;
-    const per = defOf(state, e.type, e.owner).hpPer;
-    e.count = Math.max(0, Math.ceil(e.hp / per));
-    const deaths = before - e.count;
-    if (deaths > 0) {
-      // v0.2: -2 морали за тело, -3 за фланговый удар
-      e.mor = Math.max(0, e.mor - deaths * 2 - (fm > 1 ? 3 : 0));
-      let aliveIdx = 0;
-      for (const sol of e.soldiers) {
-        if (sol.alive) {
-          aliveIdx++;
-          if (aliveIdx > e.count) sol.alive = false;
-        }
-      }
-      e.hpCap = e.count * per;
-    }
+    applyPoolDamage(state, e, dmg, src, fm);
     if (e.count <= 0) {
       e.hp = 0;
       onSquadWiped(state, src, e);
+    }
+    // ярость варвара: 30% нанесённого в HP себе
+    if (src.furyT > 0 && src.count > 0) {
+      const per = defOf(state, src.type, src.owner).hpPer;
+      src.hp = Math.min(src.hpCap, src.hp + dmg * 0.3);
+      src.count = Math.max(src.count, Math.ceil(src.hp / per));
+    }
+    // яд: цель горит
+    if (src.poisonT > 0 && e.count > 0) {
+      e.dotT = 4;
+      e.dotDps = 8;
     }
   } else {
     // здания: стены — осадные x1.5, пехота 50% (wall.md)
@@ -1011,14 +1190,38 @@ function onSquadWiped(state, src, e) {
     state.stats[killer].kills += bodies;
     const ks = state.squads.find((x) => x.id === src.id);
     if (ks) ks.kills += bodies;
-    // опыт герою-убийце в радиусе 30м (следопыт +20% с лагерей)
+    // опыт герою-убийце в радиусе 30м (следопыт/библиотека +20% с лагерей)
     const h = heroOf(state, killer);
     if (h && Math.hypot(h.x - e.x, h.z - e.z) <= 7.5) {
       let xp = xpForVictim(state, e);
-      if (e.owner === 'neutral' && h.hero.arch === 'ranger') xp = Math.round(xp * 1.2);
+      if (e.owner === 'neutral') {
+        if (h.hero.arch === 'ranger') xp = Math.round(xp * 1.2);
+        if (h.hero.arch === 'mage') xp = Math.round(xp * 1.2);
+      }
       awardXp(state, killer, xp);
     }
     if (killer === 'player' && src.type === 'hero') state.quest.heroKills = (state.quest.heroKills || 0) + 1;
+  }
+  // пассивки на смерти рядом: возмездие/жатва/семена
+  for (const hsq of state.squads) {
+    if (hsq.type !== 'hero' || hsq.count <= 0 || !hsq.hero) continue;
+    const d = Math.hypot(hsq.x - e.x, hsq.z - e.z);
+    if (hsq.hero.arch === 'paladin' && d <= 5.5 && hsq.owner === e.owner && e.type !== 'hero') {
+      hsq.hero.retrib = Math.min(0.24, (hsq.hero.retrib || 0) + 0.08);
+      hsq.hero.retribT = 20;
+    }
+    if (hsq.hero.arch === 'necromancer' && d <= 7.5) {
+      hsq.hero.manaBank = Math.min(50, (hsq.hero.manaBank || 0) + 5);
+      awardXp(state, hsq.owner, 5);
+    }
+    if (hsq.hero.arch === 'druid' && d <= 6.25 && !sameTeam(state, hsq.owner, e.owner)) {
+      const sd = heroPassive(state, 'druid', 'seeds');
+      if (sd && state.rng() < (sd.foodChance ?? 0.2) && (hsq.hero.seedsMade || 0) < (sd.cap ?? 200)) {
+        hsq.hero.seedsMade = (hsq.hero.seedsMade || 0) + (sd.food ?? 20);
+        const p = state.players[hsq.owner];
+        p.res.food = Math.min(capOf(state, hsq.owner, 'food'), p.res.food + (sd.food ?? 20));
+      }
+    }
   }
   if (state.stats[e.owner]) state.stats[e.owner].losses += bodies;
   state.lastCombat = { x: e.x, z: e.z, t: state.t };
@@ -1029,7 +1232,7 @@ function onSquadWiped(state, src, e) {
       const p = state.players[killer];
       const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[killer]);
       const loot = R?.lootMult || 1; // каганат: грабеж +30%
-      // Трофеи воеводы + Добыча следопыта на золото с лагерей
+      // Трофеи воеводы + Добыча следопыта + Топоры варвара на золото с лагерей
       let campGold = 1;
       const kh = heroOf(state, killer);
       if (kh && Math.hypot(kh.x - e.x, kh.z - e.z) <= 7.5) {
@@ -1041,6 +1244,12 @@ function onSquadWiped(state, src, e) {
           const pr = heroPassive(state, 'ranger', 'prey');
           if (pr) campGold *= pr.goldMult || 1.5;
         }
+        if (kh.hero.arch === 'barbarian') campGold *= 1.05;
+      }
+      // Трофейные топоры: 10% серого шмота с элиты
+      if (kh && kh.hero.arch === 'barbarian' && killer === 'player'
+        && (state.heroesData?.eliteTypes || []).includes(e.type) && state.rng() < 0.1) {
+        state.droppedGear.push('gray');
       }
       const parts = [];
       for (const [k, v] of Object.entries(nd.reward)) {
@@ -1069,16 +1278,53 @@ function updateSquad(state, s, dt) {
   if (s.count <= 0) return;
   const def = defOf(state, s.type, s.owner);
   s.atkCd -= dt;
-  // тики баффов/меток/засады
+  // стелс: друид прячет стоящих своих в лесу в ауре; разбойник-герой скрыт пока стоит
+  s.stealthHide = false;
+  {
+    const dh = heroOf(state, s.owner);
+    if (dh && dh.id !== s.id && dh.hero.arch === 'druid' && !s.order
+      && inForest(state, s.x, s.z) && Math.hypot(s.x - dh.x, s.z - dh.z) <= 6.25) {
+      s.stealthHide = true;
+    }
+    if (s.type === 'hero' && s.hero.arch === 'rogue' && !s.order && s.count > 0) {
+      s.stealthHide = true;
+    }
+  }
   if (s.rushT > 0) s.rushT -= dt;
   if (s.unbrT > 0) s.unbrT -= dt;
   if (s.invisT > 0) s.invisT -= dt;
   if (s.markT > 0) s.markT -= dt;
-  // герой: мана и кулдауны
+  if (s.protT > 0) s.protT -= dt;
+  if (s.rootT > 0) s.rootT -= dt;
+  if (s.slowT > 0) s.slowT -= dt;
+  if (s.furyT > 0) s.furyT -= dt;
+  if (s.savageT > 0) s.savageT -= dt;
+  if (s.poisonT > 0) s.poisonT -= dt;
+  if (s.curseT > 0) s.curseT -= dt;
+  if (s.dotT > 0) {
+    // яд/поджог: урон в пул ( deaths через общую механику)
+    s.dotT -= dt;
+    applyPoolDamage(state, s, (s.dotDps || 0) * dt, null);
+    if (s.count <= 0) {
+      s.hp = 0;
+      onSquadWiped(state, { owner: 'neutral', type: '__dot', x: s.x, z: s.z }, s);
+      return;
+    }
+  }
+  // герой: мана и кулдауны (+реген маны из данных, перегрев мага, банк жатвы)
   if (s.hero) {
-    s.hero.mana = Math.min(def.manaMax, s.hero.mana + 2 * dt);
+    s.hero.mana = Math.min(def.manaMax, s.hero.mana + 2 * (def.manaRegen || 1) * dt);
+    if (s.hero.manaBank > 0) {
+      const take = Math.min(s.hero.manaBank, def.manaMax - s.hero.mana, 10 * dt);
+      s.hero.mana += take;
+      s.hero.manaBank -= take;
+    }
     s.hero.qCd = Math.max(0, s.hero.qCd - dt);
     s.hero.eCd = Math.max(0, s.hero.eCd - dt);
+    if (s.hero.retribT > 0) {
+      s.hero.retribT -= dt;
+      if (s.hero.retribT <= 0) s.hero.retrib = 0;
+    }
     // Ополчение по свистку (наместник): бесплатный отряд у Ратуши на 60 сек
     if (s.hero.arch === 'steward') {
       s.hero.militiaCd = Math.max(0, (s.hero.militiaCd || 0) - dt);
@@ -1140,6 +1386,9 @@ function updateSquad(state, s, dt) {
     for (const o of state.squads) {
       if (!state.players[o.owner]) continue; // нейтралы дерутся только с игроками
       if (o.count <= 0) continue;
+      // стая друида: волки не агрятся на его героя
+      if (o.type === 'hero' && s.type === 'wolves' && o.hero.arch === 'druid') continue;
+      if (o.count <= 0) continue;
       if (Math.hypot(o.x - s.home.x, o.z - s.home.z) > nd.leash) continue; // не гнаться далеко
       const d = (o.x - s.x) ** 2 + (o.z - s.z) ** 2;
       if (d < bestD) { bestD = d; best = o; }
@@ -1178,30 +1427,40 @@ function updateSquad(state, s, dt) {
     }
     return;
   }
-  if (effMor(state, s) < (state.rules.moraleFlee ?? 30) && !s.unbrT) {
+  if (effMor(state, s) < (state.rules.moraleFlee ?? 30) && !s.unbrT && !s.furyT) {
     s.fleeT = state.rules.fleeSec ?? 8;
     s.mor = 45;
     event(state, `Отряд ${def.name} бежит!`, 'combat');
     return;
   }
-  // реген морали вне боя; при голоде регена нет, только -15/мин (03-resources)
+  // реген морали вне боя; при голоде регена нет, только -15/мин (03-resources); обет паладина игнорит голод
   if (state.players[s.owner]?.starving) {
-    s.mor = Math.max(0, s.mor - 0.25 * dt);
+    const ph = heroOf(state, s.owner);
+    const vow = ph && ph.hero.arch === 'paladin' && Math.hypot(s.x - ph.x, s.z - ph.z) <= 5.5;
+    if (!vow) s.mor = Math.max(0, s.mor - 0.25 * dt);
   } else if (state.t - s.lastDmgT > 6) {
     const cap = 70 + (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA) ? 10 : 0)
       + (state.players[s.owner]?.townMor || 0);
     s.mor = Math.min(cap, s.mor + 2 * dt);
   }
-  // хил храма 1%/сек вне боя
-  if (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA)
-    && state.t - s.lastDmgT > 6 && s.hp < s.hpCap) {
-    s.hp = Math.min(s.hpCap, s.hp + s.hpMax * 0.01 * dt);
-    s.count = Math.max(s.count, Math.ceil(s.hp / def.hpPer));
+  // хил аур вне боя: храм 1%/сек, паладин 0.5%/сек, друид 1%/сек; проклятие режет хил 50%
+  {
+    let rate = 0;
+    if (nearOwn(state, s.owner, 'temple', s.x, s.z, TEMPLE_AURA)) rate = Math.max(rate, 0.01);
+    const ph2 = heroOf(state, s.owner);
+    if (ph2 && ph2.id !== s.id) {
+      if (ph2.hero.arch === 'paladin' && Math.hypot(s.x - ph2.x, s.z - ph2.z) <= 5.5) rate = Math.max(rate, 0.005);
+      if (ph2.hero.arch === 'druid' && Math.hypot(s.x - ph2.x, s.z - ph2.z) <= 6.25) rate = Math.max(rate, 0.01);
+    }
+    if (s.curseT > 0) rate *= 0.5;
+    if (rate > 0 && state.t - s.lastDmgT > 6 && s.hp < s.hpCap) {
+      s.hp = Math.min(s.hpCap, s.hp + s.hpMax * rate * dt);
+      s.count = Math.max(s.count, Math.ceil(s.hp / def.hpPer));
+    }
   }
 
   // --- лекарь: лечит своих в 15м (6 HP/сек), не атакует ---
-  if (s.type === 'healer') {
-    let best = null;
+  if (s.type === 'healer') {    let best = null;
     let bestMissing = 0;
     for (const o of state.squads) {
       if (o.owner !== s.owner || o.count <= 0 || o.id === s.id) continue;
@@ -1218,7 +1477,13 @@ function updateSquad(state, s, dt) {
   }
 
   const sb = siegeBonus(state, s);
-  const range = m(def.range || 0) * (def.range ? 1 : 0) + sb.range + 1.2;
+  let range = m(def.range || 0) * (def.range ? 1 : 0) + sb.range + 1.2;
+  // Тепло мага: +10% дальности своим дальнобойным рядом
+  if (def.range) {
+    const mh = heroOf(state, s.owner);
+    if (mh && mh.hero.arch === 'mage' && mh.id !== s.id
+      && Math.hypot(s.x - mh.x, s.z - mh.z) <= 5.5) range *= 1.1;
+  }
   const minR = m(def.minRange || 0);
   const period = def.reload || (def.range ? RANGED_PERIOD_DEFAULT : MELEE_PERIOD);
 
@@ -1236,13 +1501,30 @@ function updateSquad(state, s, dt) {
     if (d <= range) {
       s.face = Math.atan2(tgt.x - s.x, tgt.z - s.z);
       if (s.atkCd <= 0) {
-        s.atkCd = period;
+        // кровь за кровь: урон ×1.25 при HP<30% (герой), отрядам рядом +10%
+        let periodEff = period;
+        if (s.type === 'hero' && s.hero.arch === 'barbarian' && s.hp < s.hpMax * 0.3) {
+          periodEff *= 0.75;
+        }
+        s.atkCd = periodEff;
         let mult = sb.dmg;
         const p = state.players[s.owner];
         if (p.res.gold <= 0 && (def.upkeep?.gold || 0) > 0) mult *= 0.8; // нет золота на upkeep
+        if (s.slowT > 0) mult *= 0.8; // кольцо мороза режет урон
         // чардж кавалерии: разгон >1.5с — light x1.8, heavy x2 первые удары
         if ((s.type === 'light_cav' && s.charge > 1.5) || (s.type === 'heavy_cav' && s.charge > 1.5)) {
           mult *= s.type === 'heavy_cav' ? 2.0 : 1.8;
+        }
+        // дикий рывок: первый удар x1.5
+        if (s.savageT > 0) {
+          mult *= 1.5;
+          s.savageT = 0;
+        }
+        // кровь за кровь отрядам: +10% рядом с раненым варваром
+        if (s.type !== 'hero') {
+          const bh = heroOf(state, s.owner);
+          if (bh && bh.hero.arch === 'barbarian' && bh.hp < bh.hpMax * 0.3
+            && Math.hypot(s.x - bh.x, s.z - bh.z) <= 5) mult *= 1.1;
         }
         s.charge = 0;
         if (def.aoe) {
@@ -1268,7 +1550,7 @@ function updateSquad(state, s, dt) {
       s.order = null;
     }
   }
-  if (moveX !== null) {
+  if (moveX !== null && !(s.rootT > 0)) {
     const d = Math.hypot(moveX - s.x, moveZ - s.z) || 1;
     s.face = Math.atan2(moveX - s.x, moveZ - s.z);
     let speed = def.speed;
@@ -1292,6 +1574,13 @@ function updateSquad(state, s, dt) {
       }
     }
     speed *= wm * mm;
+    if (s.slowT > 0) speed *= 0.5; // кольцо мороза
+    // аура разбойника: +10% скорости своим рядом
+    {
+      const rh = heroOf(state, s.owner);
+      if (rh && rh.hero.arch === 'rogue' && rh.id !== s.id
+        && Math.hypot(s.x - rh.x, s.z - rh.z) <= 4.5) speed *= 1.1;
+    }
     const step = Math.min(d, speed * dt);
     s.x += ((moveX - s.x) / d) * step;
     s.z += ((moveZ - s.z) / d) * step;
@@ -1459,7 +1748,7 @@ function updateTowers(state, dt) {
     let bestD = range * range;
     for (const s of state.squads) {
       if (s.count <= 0 || sameTeam(state, s.owner, b.owner)) continue;
-      if (s.invisT > 0 && Math.hypot(s.x - b.x, s.z - b.z) > 5) continue; // башни видят засаду в 20м
+      if ((s.invisT > 0 || s.stealthHide) && Math.hypot(s.x - b.x, s.z - b.z) > 5) continue; // башни видят скрытых в 20м
       const d = (s.x - b.x) ** 2 + (s.z - b.z) ** 2;
       if (d < bestD) { bestD = d; best = s; }
     }
@@ -1577,6 +1866,7 @@ export function updateFog(state, team = state.mode === 'ffa' ? 'player' : 'A') {
 // Предполагается, что state.fog посчитан updateFog(state, team) для его стороны.
 export function isVisibleFor(state, e, pid) {
   if (e.owner === pid || sameTeam(state, e.owner, pid)) return true;
+  if ((e.invisT || 0) > 0 || e.stealthHide) return false; // засада/стелс не видны никак
   const idx = fogCell(state, e.x, e.z);
   if (!state.fog.vis[idx]) return false;
   if (e.count !== undefined && inForest(state, e.x, e.z)) {
