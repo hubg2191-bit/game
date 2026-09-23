@@ -72,13 +72,12 @@ function thLv(s) {
   return s.buildings.find((b) => b.owner === 'player' && b.type === 'townhall')?.level || 0;
 }
 // Мгновенная достройка для сетапов (без читов в бою)
-let setupId = -1;
 function setupHelpers(s) {
   return {
     construct(type, x, z) {
-      // напрямую через внутренний конструкт: создаём готовое здание
+      // напрямую через внутренний конструкт: создаём готовое здание (id из счётчика стейта)
       s.buildings.push({
-        id: setupId--,
+        id: s.nextId++,
         type, owner: 'player', x, z,
         hp: 1000, hpMax: 1000, level: 1, queue: [],
         rally: { x: x + 6, z: z + 6 }, cd: 0, buildT: 0, buildTotal: 0,

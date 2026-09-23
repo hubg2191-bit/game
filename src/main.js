@@ -3,9 +3,10 @@ import './style.css';
 import * as THREE from 'three';
 import {
   createGame, update, orderMove, orderAttack, recruit, construct, upgrade, trade, castSkill,
-  setDirective, giveAlly, forgeUpgrade,
+  setDirective, giveAlly, forgeUpgrade, formationOffsets,
   SIM_TICK_HZ, WORLD_SCALE, DIFFS, teamOf, defOf, heroOf,
 } from './game/sim.js';
+import { NetClient, getWssUrl } from './game/net.js';
 import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
 import {
@@ -569,7 +570,508 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   requestAnimationFrame(frame);
 }
 
-// --- вход: мета (столица/герой/клан/сезон) -> лобби -> бой ---
+// --- онлайн: сервер авторитетен, клиент — вьюха из снапшотов + мгновенные маркеры ---
+function upsertSquad(view, e) {
+  let s = view.squads.find((x) => x.id === e.id);
+  if (!s) {
+    s = { id: e.id, soldiers: [], order: null, atkCd: 0, fleeT: 0, lastDmgT: -99, home: null, charge: 0, kills: 0 };
+    view.squads.push(s);
+  }
+  s.type = e.t;
+  s.owner = e.o;
+  s.x = e.x;
+  s.z = e.z;
+  s.hp = e.hp;
+  s.hpMax = e.hm;
+  s.hpCap = e.hm;
+  s.count = e.c;
+  s.mor = e.m;
+  s.face = e.f;
+  s.loose = !!e.l;
+  s.markT = e.mk ? 8 : 0;
+  s.invisT = e.iv ? 8 : 0;
+  if (!s.size || e.c > s.size) s.size = e.c;
+  const want = s.size;
+  if (!s.soldiers || s.soldiers.length !== want) {
+    s.soldiers = formationOffsets(want).map((o) => ({ dx: o.dx, dz: o.dz, alive: true }));
+  }
+  let aliveN = 0;
+  for (const sol of s.soldiers) {
+    sol.alive = aliveN < e.c;
+    if (sol.alive) aliveN++;
+  }
+  s.hero = e.hero ? { arch: e.hero.arch, level: e.hero.level, mana: e.hero.mana || 0, mm: e.hero.mm || 100, qCd: e.hero.q || 0, eCd: e.hero.e || 0, xpBattle: e.hero.xp || 0 } : undefined;
+}
+function upsertBuilding(view, e) {
+  let b = view.buildings.find((x) => x.id === e.id);
+  if (!b) {
+    b = { id: e.id, rally: { x: e.x + 6, z: e.z + 6 }, cd: 0 };
+    view.buildings.push(b);
+  }
+  b.type = e.t;
+  b.owner = e.o;
+  b.x = e.x;
+  b.z = e.z;
+  b.hp = e.hp;
+  b.hpMax = e.hm;
+  b.level = e.lv;
+  b.queue = (e.q || []).map((q) => ({ unitId: q.u, t: q.t, total: q.total || q.t }));
+  b.buildT = e.bt;
+  b.buildTotal = e.bt0;
+  b.upT = e.up;
+  b.shieldT = e.sh ? 30 : 0;
+  b.markT = e.mk ? 8 : 0;
+}
+function applySnapToView(view, snap) {
+  if (snap.full) {
+    view.squads = [];
+    view.buildings = [];
+  }
+  for (const e of snap.up || []) {
+    if (e.k === 's') upsertSquad(view, e);
+    else upsertBuilding(view, e);
+  }
+  for (const d of snap.del || []) {
+    if (d.k === 's') view.squads = view.squads.filter((x) => x.id !== d.id);
+    else view.buildings = view.buildings.filter((x) => x.id !== d.id);
+  }
+  if (snap.flags) {
+    for (const f of snap.flags) {
+      const t = view.flags.find((x) => x.id === f.id);
+      if (t) {
+        t.owner = f.o;
+        t.progress = f.p;
+      }
+    }
+  }
+  if (snap.score) view.score = snap.score;
+  if (snap.res) Object.assign(view.players.player.res, snap.res);
+  if (snap.t != null) view.t = snap.t;
+  if (snap.snap != null) view.tick = snap.snap;
+  if (snap.phase) view.phase = snap.phase;
+  if (snap.stats) view.stats = snap.stats;
+  if (snap.q) view.quest = snap.q;
+  if (snap.events) {
+    for (const ev of snap.events) {
+      if (!view.events.some((x) => x.t === ev.t && x.text === ev.text)) view.events.push(ev);
+    }
+    if (view.events.length > 40) view.events.splice(0, view.events.length - 40);
+  }
+}
+
+function makeView(mapData, mode, race) {
+  const m = (v) => v * WORLD_SCALE;
+  const all1 = () => {
+    const a = new Uint8Array(64 * 64);
+    a.fill(1);
+    return a;
+  };
+  const pids = mode === '2v2' ? ['player', 'ally', 'enemy1', 'enemy2']
+    : mode === 'ffa' ? ['player', 'enemy1', 'enemy2', 'enemy3'] : ['player', 'bot'];
+  const teamMap = mode === 'ffa' ? Object.fromEntries(pids.map((p) => [p, p]))
+    : mode === '2v2' ? { player: 'A', ally: 'A', enemy1: 'B', enemy2: 'B' } : { player: 'A', bot: 'B' };
+  return {
+    map: mapData, mode, pids, teamMap,
+    raceOf: { player: race }, racesData, units: unitsData, bdefs: buildingsData,
+    t: 0, tick: 0, phase: 'build', over: false, winner: null, reason: '',
+    players: { player: { id: 'player', res: { food: 0, wood: 0, stone: 0, iron: 0, gold: 0, popUsed: 0, popMax: 0, morale: 70 } } },
+    upgrades: { player: { forge: 0 } },
+    squads: [], buildings: [],
+    flags: (mapData.provinces || []).map((p) => ({ id: p.id, x: m(p.x), z: m(p.z), type: p.type, buff: p.buff, owner: null, progress: 0 })),
+    mines: (mapData.mines || []).map((pt) => ({ x: m(pt.x), z: m(pt.z) })),
+    camps: (mapData.camps || []).map((c) => ({ type: c.type, x: m(c.x), z: m(c.z) })),
+    hills: [
+      ...((mapData.hills || []).map((h) => ({ x: m(h.x), z: m(h.z), r: 12 }))),
+      ...((mapData.provinces || []).filter((p) => p.type === 'hill').map((p) => ({ x: m(p.x), z: m(p.z), r: 12 }))),
+    ],
+    forests: (mapData.provinces || []).filter((p) => p.type === 'forest').map((p) => ({ x: m(p.x), z: m(p.z), r: 16 })),
+    river: mapData.river ? {
+      x: m(mapData.river.x), half: m(mapData.river.width) / 2,
+      bridges: (mapData.river.bridges || []).map((b) => ({ z: m(b.z), half: m(8) / 2 })),
+      ford: mapData.river.ford ? { z: m(mapData.river.ford.z), half: m(mapData.river.ford.width) / 2 } : null,
+    } : null,
+    mountains: (mapData.passages || []).length ? {
+      x: m(768), half: 10,
+      gaps: (mapData.passages || []).map((ps) => ({ z: m(ps.z), half: m(ps.width || 6) / 2 + 2 })),
+    } : null,
+    score: mode === 'ffa' ? Object.fromEntries(pids.map((p) => [p, 0])) : { A: 0, B: 0 },
+    stats: {}, quest: { wood: 0, food: 0, neutrals: 0, flagSec: 0, marks: 0, built: 0 },
+    events: [], pings: [],
+    fog: { N: 64, vis: all1(), exp: all1() },
+  };
+}
+
+async function startOnline(lobbyCfg, meta) {
+  sceneEl.innerHTML = '';
+  const map = MAPS.find((m) => m.id === lobbyCfg.map) || MAPS[0];
+  const view = makeView(map.data, map.mode, lobbyCfg.race);
+  window.__state = view;
+  const render = new GameRender(sceneEl, view, palette);
+  const sel = { squads: [], building: null };
+  const groups = {};
+  let buildMode = null;
+  let attackMode = false;
+  let pendingSkill = null;
+  let ordersSent = 0;
+  const apmTimes = [];
+  let apmCount = 0;
+  const throttle = () => {
+    const now = performance.now();
+    while (apmTimes.length && now - apmTimes[0] > 1000) apmTimes.shift();
+    if (apmTimes.length >= 10) return false;
+    apmTimes.push(now);
+    apmCount = apmTimes.length;
+    return true;
+  };
+  const ghostMark = (x, z) => {
+    // мгновенный маркер приказа (предсказание intent по sync.md)
+    view.pings.push({ x, z, t: 7.9, team: 'A' });
+    setTimeout(() => {
+      const i = view.pings.findIndex((p) => p.x === x && p.z === z);
+      if (i >= 0) view.pings.splice(i, 1);
+    }, 700);
+  };
+
+  const ui = new GameUI(app.querySelector('#hud'), {
+    onRecruit: (bId, unitId) => {
+      if (!throttle()) return;
+      net.cmd({ cmd: 'recruit', b: bId, unit: unitId });
+      ordersSent++;
+    },
+    onUpgrade: (bId) => {
+      if (!throttle()) return;
+      net.cmd({ cmd: 'upgrade', b: bId });
+      ordersSent++;
+    },
+    onTrade: () => {
+      if (!throttle()) return;
+      net.cmd({ cmd: 'trade' });
+      ordersSent++;
+    },
+    onGive: () => {
+      if (!throttle()) return;
+      net.cmd({ cmd: 'give' });
+      ordersSent++;
+    },
+    onForgeUp: (bId) => {
+      if (!throttle()) return;
+      net.cmd({ cmd: 'forge', b: bId });
+      ordersSent++;
+    },
+    onBuild: (typeId) => {
+      buildMode = buildMode === typeId ? null : typeId;
+      ui.buildMode = buildMode;
+    },
+    onStop: () => {
+      for (const id of sel.squads) {
+        const s = view.squads.find((x) => x.id === id);
+        if (s) net.cmd({ cmd: 'move', ids: [id], x: s.x, z: s.z });
+      }
+    },
+    onSkill: (slot) => {
+      if (pendingSkill === slot) {
+        pendingSkill = null;
+        ui.pendingSkill = null;
+        return;
+      }
+      const h = view.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
+      if (!h) return;
+      const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
+      const sk = H.skills[slot === 'q' ? 0 : 1];
+      if (['ambush', 'mark'].includes(sk.id)) {
+        pendingSkill = slot;
+        ui.pendingSkill = slot;
+        return;
+      }
+      if (!throttle()) return;
+      net.cmd({ cmd: 'cast', slot, hero: h.id });
+      ordersSent++;
+    },
+  });
+  ui.pendingSkill = null;
+
+  const doMove = (x, z) => {
+    if (!sel.squads.length || !throttle()) return;
+    net.cmd({ cmd: 'move', ids: sel.squads.slice(), x, z });
+    ordersSent++;
+    ghostMark(x, z);
+  };
+  const doAttack = (ent, kind) => {
+    if (!sel.squads.length || !throttle()) return;
+    net.cmd({ cmd: 'attack', ids: sel.squads.slice(), target: ent.id, kind });
+    ordersSent++;
+  };
+
+  const canvas = render.renderer.domElement;
+  const keys = {};
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  let dragStart = null;
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragStart = { x: e.clientX, y: e.clientY };
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragStart) return;
+    const x = Math.min(dragStart.x, e.clientX);
+    const y = Math.min(dragStart.y, e.clientY);
+    const w = Math.abs(e.clientX - dragStart.x);
+    const h = Math.abs(e.clientY - dragStart.y);
+    rubber.style.display = w + h > 10 ? 'block' : 'none';
+    rubber.style.transform = `translate(${x}px, ${y}px)`;
+    rubber.style.width = `${w}px`;
+    rubber.style.height = `${h}px`;
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    if (e.button === 2) {
+      if (buildMode) {
+        buildMode = null;
+        ui.buildMode = null;
+        return;
+      }
+      const pt = render.groundPoint(ndcOf(e, render.renderer));
+      const ent = render.pick(ndcOf(e, render.renderer));
+      if (pt && sel.squads.length) {
+        if (ent && (ent.kind === 'squad' || ent.kind === 'building')) {
+          const target = ent.kind === 'squad'
+            ? view.squads.find((s) => s.id === ent.id)
+            : view.buildings.find((b) => b.id === ent.id);
+          if (target && teamOf(view, target.owner) !== teamOf(view, 'player') && target.hp > 0) {
+            doAttack(ent, ent.kind);
+            return;
+          }
+        }
+        doMove(pt.x, pt.z);
+      }
+      return;
+    }
+    if (e.button !== 0 || !dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 10) {
+      const x0 = Math.min(dragStart.x, e.clientX);
+      const y0 = Math.min(dragStart.y, e.clientY);
+      const x1 = Math.max(dragStart.x, e.clientX);
+      const y1 = Math.max(dragStart.y, e.clientY);
+      const v = new THREE.Vector3();
+      sel.squads = view.squads
+        .filter((s) => s.owner === 'player' && s.count > 0)
+        .filter((s) => {
+          v.set(s.x, 1, s.z).project(render.camera);
+          const sx = (v.x * 0.5 + 0.5) * innerWidth;
+          const sy = (-v.y * 0.5 + 0.5) * innerHeight;
+          return sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1;
+        })
+        .map((s) => s.id);
+      sel.building = null;
+    } else {
+      const pt = render.groundPoint(ndcOf(e, render.renderer));
+      const ent = render.pick(ndcOf(e, render.renderer));
+      if (pendingSkill && ent) {
+        const h = view.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
+        if (h && throttle()) {
+          net.cmd({ cmd: 'cast', slot: pendingSkill, hero: h.id, target: ent.id, kind: ent.kind });
+          ordersSent++;
+        }
+        pendingSkill = null;
+        ui.pendingSkill = null;
+      } else if (attackMode && pt && sel.squads.length) {
+        doMove(pt.x, pt.z);
+        attackMode = false;
+      } else if (buildMode && pt) {
+        if (throttle()) {
+          net.cmd({ cmd: 'build', b: buildMode, x: pt.x, z: pt.z });
+          ordersSent++;
+        }
+        buildMode = null;
+        ui.buildMode = null;
+      } else if (ent) {
+        if (ent.kind === 'squad') {
+          const s = view.squads.find((x) => x.id === ent.id);
+          if (s && s.owner === 'player') {
+            sel.squads = e.shiftKey ? [...new Set([...sel.squads, s.id])] : [s.id];
+            sel.building = null;
+          }
+        } else {
+          const b = view.buildings.find((x) => x.id === ent.id);
+          if (b && b.owner === 'player' && b.hp > 0) {
+            sel.building = b.id;
+            sel.squads = [];
+          }
+        }
+      } else {
+        sel.squads = [];
+        sel.building = null;
+      }
+    }
+    dragStart = null;
+    rubber.style.display = 'none';
+  });
+  ui.minimap.addEventListener('mousedown', (e) => {
+    if (e.button !== 2 || !sel.squads.length) return;
+    e.preventDefault();
+    const r = ui.minimap.getBoundingClientRect();
+    const W = map.data.size_m * WORLD_SCALE;
+    doMove(((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * W);
+  });
+  ui.minimap.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  const onKey = (e) => {
+    keys[e.code] = true;
+    if (e.code === 'Escape') {
+      buildMode = null;
+      ui.buildMode = null;
+      attackMode = false;
+      pendingSkill = null;
+      ui.pendingSkill = null;
+    }
+    if (e.code === 'KeyA') attackMode = true;
+    if (e.code === 'KeyF' && sel.squads.length && throttle()) {
+      const loose = !view.squads.find((s) => s.id === sel.squads[0])?.loose;
+      net.cmd({ cmd: 'stance', ids: sel.squads.slice(), stance: loose ? 'loose' : 'line' });
+      ordersSent++;
+    }
+    if (e.code === 'KeyH') {
+      const th = view.buildings.find((b) => b.owner === 'player' && b.type === 'townhall' && b.hp > 0);
+      if (th) {
+        render.controls.target.set(th.x, 0, th.z);
+        render.camera.position.set(th.x, 55, th.z + 60);
+      }
+    }
+    if (e.code === 'F1' || e.code === 'F2' || e.code === 'F4') {
+      if (map.mode !== '2v2' || !throttle()) return;
+      const ping = e.code === 'F1' ? 'F1' : e.code === 'F2' ? 'F2' : 'F4';
+      const t = render.controls.target;
+      net.cmd(ping === 'F1' ? { cmd: 'ping', ping, x: t.x, z: t.z } : { cmd: 'ping', ping });
+      ordersSent++;
+    }
+  };
+  const onKeyUp = (e) => (keys[e.code] = false);
+  addEventListener('keydown', onKey);
+  addEventListener('keyup', onKeyUp);
+
+  function panCamera(dt) {
+    const sp = 40 * dt;
+    const fwd = new THREE.Vector3();
+    render.camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    fwd.normalize();
+    const right = new THREE.Vector3(fwd.z, 0, -fwd.x).negate();
+    const mv = new THREE.Vector3();
+    if (keys.KeyW || keys.ArrowUp) mv.add(fwd);
+    if (keys.KeyS || keys.ArrowDown) mv.sub(fwd);
+    if (keys.KeyD || keys.ArrowRight) mv.add(right);
+    if (keys.ArrowLeft) mv.sub(right);
+    if (mv.lengthSq() > 0) {
+      mv.normalize().multiplyScalar(sp);
+      render.camera.position.add(mv);
+      render.controls.target.add(mv);
+    }
+  }
+
+  // --- сеть ---
+  let lastSnapAt = 0;
+  let finished = false;
+  const net = new NetClient({
+    onOpen: () => {},
+    onJoined: (m) => {
+      if (m.races) Object.assign(view.raceOf, m.races);
+      if (m.pid && m.pid !== 'player') {
+        // прототип: браузер играет только слот player (второй человек в 1v1 — headless/PvP на протоколе)
+        ui.overlay.innerHTML = `<div class="card"><h1>Слот занят</h1><p class="dim">Матчмейкер отдал вам pid ${m.pid} — браузерный клиент прототипа играет только за player. Откройте второе окно позже.</p><button onclick="location.reload()">Назад</button></div>`;
+        ui.overlay.classList.remove('hidden');
+        net.close();
+      }
+    },
+    onOpen: () => {},
+    onQueue: () => {
+      ui.overlay.innerHTML = `<div class="card"><h1>Поиск матча…</h1><p class="dim">${getWssUrl()}</p></div>`;
+      ui.overlay.classList.remove('hidden');
+    },
+    onSnap: (m) => {
+      lastSnapAt = performance.now();
+      applySnapToView(view, m);
+    },
+    onEnd: (m) => {
+      if (finished) return;
+      finished = true;
+      const win = view.mode === 'ffa' ? m.winner === net.pid : m.winner === 'A';
+      mmr = Math.max(100, Math.min(3000, mmr + (win ? 25 : -20)));
+      localStorage.setItem('tt_mmr', String(mmr));
+      let rewardText = '';
+      if (meta) {
+        const heroSq = view.squads.find((s) => s.owner === 'player' && s.type === 'hero');
+        const rw = applyBattleResult(meta, { win, xp: heroSq?.hero.xpBattle || 0, goldEarned: 0, maxLevel: heroesData.maxLevel });
+        rewardText = `Награды: +${rw.gold}🪙 +${rw.xp} XP${rw.capped ? ' (дейли-кап!)' : ''}`;
+        const qdone = settleQuests(meta, questsData, {
+          wood: view.quest.wood, food: view.quest.food, neutrals: view.quest.neutrals,
+          flagSec: view.quest.flagSec, battles: 1, orders: ordersSent,
+          heroKills: view.quest.heroKills || 0, built: view.quest.built,
+          marks: view.quest.marks, heroArch: meta.hero.arch, wins: win ? 1 : 0,
+        });
+        if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
+        if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
+      }
+      ui.showEnd(m.winner, m.reason, m.score, m.stats, view.squads, {
+        state: view, unitName, mmr, rewardText, replayLabel: 'Скачать реплей',
+        onReplay: () => net.getReplay(),
+      });
+    },
+    onReplay: (m) => {
+      const blob = new Blob([JSON.stringify(m.replay)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `replay-${Date.now()}.json`;
+      a.click();
+    },
+    onErr: (m) => {
+      view.events.push({ t: view.t, text: m.kick ? `Кик: ${m.reason || ''}` : `Приказ отклонён: ${m.err}`, kind: 'combat' });
+    },
+    onClose: () => {
+      if (finished) return;
+      ui.overlay.innerHTML = `<div class="card"><h1>Соединение потеряно</h1><p class="dim">Переподключение…</p></div>`;
+      ui.overlay.classList.remove('hidden');
+      setTimeout(async () => {
+        try {
+          await net.connect();
+          net.hello({ simVersion: 12, clientId: net.clientId, room: net.room });
+        } catch { /* следующая попытка следующим разрывом */ }
+      }, 2000);
+    },
+  });
+
+  try {
+    await net.connect();
+  } catch {
+    ui.overlay.innerHTML = `<div class="card"><h1>Нет связи</h1><p class="dim">${getWssUrl()} — поднимите сервер: cd server && node src/index.js</p><button onclick="location.reload()">Назад</button></div>`;
+    ui.overlay.classList.remove('hidden');
+    return;
+  }
+  net.hello({
+    simVersion: 12, mode: map.mode, map: lobbyCfg.map, race: lobbyCfg.race,
+    hero: { arch: meta?.hero.arch || 'warlord', level: meta?.hero.level || 1, gear: meta?.hero.gear || {}, perks: meta?.hero.perks || [] },
+    mmr,
+  });
+
+  let last = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min((now - last) / 1000, 0.25);
+    last = now;
+    if (performance.now() - lastSnapAt > 1500 && net.room) {
+      // лаг-бейдж сменяет тишину
+      render.controls.target.y = render.controls.target.y; // noop keep
+    }
+    panCamera(dt);
+    render.controls.update();
+    render.sync(view, sel, dt);
+    const nowMs = performance.now();
+    while (apmTimes.length && nowMs - apmTimes[0] > 1000) apmTimes.shift();
+    ui.update(view, sel, apmTimes.length);
+    ui.heroPanel(view, heroesData);
+  }
+  addEventListener('resize', () => render.resize());
+  requestAnimationFrame(frame);
+}
 const meta = loadMeta();
 const offline = offlineEarnings(meta);
 if (offline.gold > 0) {
@@ -592,6 +1094,7 @@ function openLobby() {
       races: racesData.races,
       diffs: Object.entries(DIFFS).filter(([id]) => id !== 'passive').map(([id, d]) => ({ id, label: d.label })),
       mmr,
+      onOnline: (cfg) => startOnline(cfg, meta),
     },
     (cfg) => startMatch(cfg, null, meta)
   );

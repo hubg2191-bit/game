@@ -411,7 +411,8 @@ export class GameRender {
     }
     if (g) {
       g.visible = b.hp > 0 && isVisible(this.state, b);
-      const progress = b.buildT > 0 ? 1 - b.buildT / b.buildTotal : 1;
+      const total = b.buildTotal || b.bt0 || 1;
+      const progress = b.buildT > 0 ? 1 - b.buildT / total : 1;
       g.scale.setScalar(0.3 + 0.7 * progress);
       if (g.userData.blades && b.hp > 0 && b.buildT <= 0) g.userData.blades.rotation.z += 0.02;
       g.traverse((o) => {

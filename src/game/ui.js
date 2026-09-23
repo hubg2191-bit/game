@@ -167,13 +167,13 @@ export class GameUI {
     const render = () => {
       this.overlay.innerHTML = `
       <div class="card lobby">
-        <h1>Thrones & Towns <span>1.0 Релиз</span></h1>
-        <div class="lrow"><span>Карта:</span> ${lobby.maps.map((m) => `<button data-k="map" data-v="${m.id}" class="${!cfg.mission && cfg.map === m.id ? 'active' : ''}">${m.name}</button>`).join('')}</div>
+        <h1>Thrones & Towns <span>1.0 Релиз</span></h1>        <div class="lrow"><span>Карта:</span> ${lobby.maps.map((m) => `<button data-k="map" data-v="${m.id}" class="${!cfg.mission && cfg.map === m.id ? 'active' : ''}">${m.name}</button>`).join('')}</div>
         <div class="lrow"><span>Обучение:</span> ${(lobby.missions || []).map((m) => `<button data-k="mission" data-v="${m.id}" title="${m.briefing}" class="${cfg.mission === m.id ? 'active' : ''}">${m.name}</button>`).join('')}</div>
         <div class="lrow"><span>Раса:</span> ${lobby.races.map((r) => `<button data-k="race" data-v="${r.id}" title="${r.desc}" class="${cfg.race === r.id ? 'active' : ''}">${r.name}</button>`).join('')}</div>
         <div class="lrow"><span>Боты:</span> ${lobby.diffs.map((d) => `<button data-k="difficulty" data-v="${d.id}" class="${cfg.difficulty === d.id ? 'active' : ''}">${d.label}</button>`).join('')}</div>
         <p class="dim">Равнина 1v1 • Речная долина 2v2 • Перевал FFA • MMR ${lobby.mmr}</p>
         <button id="startBtn">В бой</button>
+        <button id="onlineBtn" title="Сетевой матч через WSS_URL">🌐 В сеть</button>
       </div>`;
       this.overlay.classList.remove('hidden');
       this.overlay.querySelectorAll('[data-k]').forEach((btn) => {
@@ -188,6 +188,13 @@ export class GameUI {
         this.overlay.classList.add('hidden');
         onStart(cfg);
       };
+      const ob = this.overlay.querySelector('#onlineBtn');
+      if (ob && lobby.onOnline) {
+        ob.onclick = () => {
+          this.overlay.classList.add('hidden');
+          lobby.onOnline(cfg);
+        };
+      }
     };
     render();
   }
@@ -248,7 +255,7 @@ export class GameUI {
         ${extra.rewardText ? `<p class="good">${extra.rewardText}</p>` : ''}
         <p class="dim">Фраги ${st.kills} : ${foe.kills} • Потери ${st.losses}${mvp ? ` • MVP-отряд: ${mvpName} (${mvp.kills} убийств)` : ''}</p>
         <button id="againBtn">Ещё раз</button>
-        ${extra.onReplay ? '<button id="replayBtn">Смотреть реплей</button>' : ''}
+        ${extra.onReplay ? `<button id="replayBtn">${extra.replayLabel || 'Смотреть реплей'}</button>` : ''}
         ${extra.onExit ? '<button id="exitBtn">К столице</button>' : ''}
       </div>`;
     this.overlay.classList.remove('hidden');
@@ -376,7 +383,13 @@ export class GameUI {
         `<h3>Отряды: ${list.length}</h3>` +
         list
           .map((s) => {
-            const u = defOf(state, s.type, s.owner) || { name: s.type, size: '?', hpPer: 1 };
+            let u;
+            try {
+              u = defOf(state, s.type, s.owner);
+            } catch {
+              u = null;
+            }
+            u = u || { name: s.type, size: s.count };
             const mor = s.type === 'hero' && s.hero ? ` • мана ${Math.floor(s.hero.mana)}` : ` • мораль ${Math.ceil(s.mor)}`;
             return `<div>${u.name} — ${s.count}/${u.size} • HP ${Math.ceil(s.hp)}/${s.hpMax}${mor}${s.fleeT > 0 ? ' 🏃 БЕЖИТ' : ''}${(s.invisT || 0) > 0 ? ' 👻' : ''}</div>`;
           })
@@ -429,7 +442,7 @@ export class GameUI {
     el.innerHTML = `
       <div class="hname">${H.name} · ур.${h.hero.level}</div>
       <div class="hbar xp"><div style="width:${Math.min(100, (h.hero.xpBattle / need) * 100)}%"></div></div>
-      <div class="hbar mana"><div style="width:${(h.hero.mana / defOf(state, 'hero', 'player').manaMax) * 100}%"></div></div>
+      <div class="hbar mana"><div style="width:${h.hero.mm ? (h.hero.mana / h.hero.mm) * 100 : 0}%"></div></div>
       <button data-skill="q" class="${this.pendingSkill === 'q' ? 'armed' : ''}" ${qRdy || this.pendingSkill === 'q' ? '' : 'disabled'} title="${q.name}: ${h.hero.qCd > 0 ? Math.ceil(h.hero.qCd) + 'с' : q.mana + ' маны'}">Q ${q.name}</button>
       <button data-skill="e" class="${this.pendingSkill === 'e' ? 'armed' : ''}" ${eRdy || this.pendingSkill === 'e' ? '' : 'disabled'} title="${eSk.name}: ${h.hero.eCd > 0 ? Math.ceil(h.hero.eCd) + 'с' : eSk.mana + ' маны'}">E ${eSk.name}</button>`;
     el.querySelectorAll('[data-skill]').forEach((btn) => {

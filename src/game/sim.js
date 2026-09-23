@@ -106,8 +106,8 @@ export function buildMenuFor(state, pid) {
 
 const START_RES = { food: 650, wood: 650, stone: 300, iron: 200, gold: 350 };
 
-let nextId = 1;
-const nid = () => nextId++;
+let nextId = 1; // legacy fallback, реальные id берёт state.nextId
+const nid = (state) => (state && state.nextId != null ? state.nextId++ : nextId++);
 
 export function unitById(unitsData, id) {
   return unitsData.squads.find((u) => u.id === id);
@@ -162,8 +162,7 @@ export function pay(res, cost) {
   for (const [k, v] of Object.entries(cost || {})) res[k] -= v;
 }
 
-function formationOffsets(n) {
-  const offs = [];
+export function formationOffsets(n) {  const offs = [];
   const perRow = Math.ceil(Math.sqrt(n));
   for (let i = 0; i < n; i++) {
     const r = Math.floor(i / perRow);
@@ -180,7 +179,7 @@ function addSquad(state, owner, typeId, x, z, opts = {}) {
   if (!opts.def && INFANTRY_IDS.has(typeId) && (state.upgrades?.[owner]?.forge || 0) >= 1) hpScale = 1.1;
   const offs = formationOffsets(def.size);
   const sq = {
-    id: nid(),
+    id: nid(state),
     type: typeId,
     owner,
     x,
@@ -228,8 +227,7 @@ function spawnNeutrals(state) {
 export function heroOf(state, pid) {
   return state.squads.find((s) => s.owner === pid && s.type === 'hero' && s.count > 0);
 }
-function gearStatsOf(gear = {}) {
-  const total = {};
+function gearStatsOf(gear = {}) {  const total = {};
   for (const item of Object.values(gear)) {
     for (const [k, v] of Object.entries(item.stats || {})) total[k] = (total[k] || 0) + v;
   }
@@ -247,7 +245,7 @@ export function perkFxOf(heroesData, arch, perkIds = []) {
   }
   return total;
 }
-function spawnHero(state, pid, arch, level, gear, perks = []) {
+export function spawnHero(state, pid, arch, level, gear, perks = []) {
   const gs = gearStatsOf(gear);
   const ps = perkFxOf(state.heroesData, arch, perks);
   const merged = {};
@@ -280,7 +278,7 @@ function addBuilding(state, owner, typeId, x, z, opts = {}) {
   const def = buildingById(state.bdefs, typeId);
   const hp = Array.isArray(def.hp) ? def.hp[0] : def.hp || 500;
   const b = {
-    id: nid(),
+    id: nid(state),
     type: typeId,
     owner,
     x,
@@ -331,8 +329,7 @@ export function sameTeam(state, a, b) {
 
 export function createGame(map, unitsData, buildingsData, rules, racesData, cfg = {}) {
   nextId = 1;
-  const mode = cfg.mode || (map.ffa ? 'ffa' : '1v1');
-  const ffa = mode === 'ffa';
+  const mode = cfg.mode || (map.ffa ? 'ffa' : '1v1');  const ffa = mode === 'ffa';
   const seed = cfg.seed ?? Math.floor(Math.random() * 1e9);
   const diff = DIFFS[cfg.difficulty] || DIFFS.normal;
   const races = { player: 'nord', ...(cfg.races || {}) };
@@ -383,6 +380,8 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
     rng: mulberry32(seed),
     t: 0,
     tick: 0,
+    nextId: 1, // счётчик id сущностей — внутри стейта (детерминизм между комнатами/реплеями)
+    phase: 'battle', // сервер ставит 'build' на первые 10 мин (rooms.md)
     over: false,
     winner: null, // 'A' | 'B'
     reason: '',
@@ -796,6 +795,32 @@ export function mountainMult(state, x, z) {
 export function inMountain(state, x, z) {
   return mountainMult(state, x, z) < 1;
 }
+// Хеш состояния для досинк-детекта (testing.md): каждые 5 сек, 3 расхождения подряд — desync
+export function hashState(state) {
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const parts = [`t${state.tick}`, `s${state.seed}`];
+  const sq = [...state.squads].sort((a, b) => a.id - b.id);
+  for (const s of sq) {
+    parts.push([s.id, s.type, s.owner, r3(s.x), r3(s.z), Math.round(s.hp), s.count, Math.round(s.mor)].join(','));
+  }
+  const bd = [...state.buildings].sort((a, b) => a.id - b.id);
+  for (const b of bd) {
+    parts.push([b.id, b.type, b.owner, Math.round(b.hp), b.level, b.queue.length].join(','));
+  }
+  for (const f of state.flags) parts.push([f.id, f.owner, Math.round(f.progress * 100)].join(','));
+  for (const pid of state.pids) {
+    const r = state.players[pid].res;
+    parts.push([pid, Math.round(r.food), Math.round(r.wood), Math.round(r.stone), Math.round(r.iron), Math.round(r.gold)].join(','));
+  }
+  parts.push(Object.entries(state.score).map(([k, v]) => `${k}:${Math.round(v)}`).join(','));
+  const str = parts.join('|');
+  let h1 = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h1 ^= str.charCodeAt(i);
+    h1 = Math.imul(h1, 0x01000193);
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0');
+}
 // Кого видит игрок: своя команда (в FFA — только себя)
 export function isViewer(state, pid) {
   if (state.mode === 'ffa') return pid === 'player';
@@ -883,6 +908,7 @@ function dealDamage(state, src, target, mult = 1) {
   const baseDmg = def ? def.dmg : src.dmg || 10;
   const srcRanged = !def ? true : (def.range || 0) > 0;
   let dmg = baseDmg * mult;
+  if (state.phase === 'build') dmg *= 0.5; // фаза стройки rooms.md: урон 50%
   if (def && e.type && CAV_IDS.has(e.type) && def.bonusVsCav) dmg *= def.bonusVsCav;
   if (def && e.count !== undefined) {
     // пробитие по тяжелой броне (xbows 1.5, halberdiers 2.0)
@@ -1403,10 +1429,12 @@ function fogCell(state, x, z) {
   const cz = Math.max(0, Math.min(state.fog.N - 1, Math.floor((z / W) * state.fog.N)));
   return cz * state.fog.N + cx;
 }
-export function updateFog(state) {
+export function updateFog(state, team = state.mode === 'ffa' ? 'player' : 'A') {
   const { N, vis, exp } = state.fog;
   const W = state.map.size_m * WORLD_SCALE;
   vis.fill(0);
+  // team: 'A'/'B' (или pid в FFA) — обзор считается для указанной стороны; по умолчанию как раньше
+  const sees = (pid) => (state.mode === 'ffa' ? pid === team : teamOf(state, pid) === team);
   const paint = (x, z, r, tower) => {
     const cr = Math.ceil(r / (W / N));
     const ccx = Math.floor((x / W) * N);
@@ -1423,13 +1451,34 @@ export function updateFog(state) {
     }
   };
   for (const s of state.squads) {
-    if (!isViewer(state, s.owner) || s.count <= 0) continue;
+    if (!sees(s.owner) || s.count <= 0) continue;
     paint(s.x, s.z, SIGHT.squad, false);
   }
   for (const b of state.buildings) {
-    if (!isViewer(state, b.owner) || b.hp <= 0 || b.buildT > 0) continue;
+    if (!sees(b.owner) || b.hp <= 0 || b.buildT > 0) continue;
     paint(b.x, b.z, sightOf(state, b), b.type === 'tower');
   }
+}
+// Видно ли сущность конкретному игроку (для серверной фильтрации тумана).
+// Предполагается, что state.fog посчитан updateFog(state, team) для его стороны.
+export function isVisibleFor(state, e, pid) {
+  if (e.owner === pid || sameTeam(state, e.owner, pid)) return true;
+  const idx = fogCell(state, e.x, e.z);
+  if (!state.fog.vis[idx]) return false;
+  if (e.count !== undefined && inForest(state, e.x, e.z)) {
+    for (const s of state.squads) {
+      if (!sameTeam(state, s.owner, pid) && s.owner !== pid) continue;
+      if (s.count <= 0) continue;
+      if (Math.hypot(s.x - e.x, s.z - e.z) < STEALTH_DIST) return true;
+    }
+    for (const b of state.buildings) {
+      if (!sameTeam(state, b.owner, pid) && b.owner !== pid) continue;
+      if (b.type !== 'tower' || b.hp <= 0 || b.buildT > 0) continue;
+      if (Math.hypot(b.x - e.x, b.z - e.z) < SIGHT.tower) return true;
+    }
+    return false;
+  }
+  return true;
 }
 // Видно ли сущность команде игрока: свои всегда; чужие — только в обзоре;
 // в лесу скрыты дальше STEALTH_DIST (башни видят скрытых в своём обзоре).
