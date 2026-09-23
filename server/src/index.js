@@ -137,7 +137,12 @@ function handle(ws, clientId, msg) {
       return;
     }
     if (msg.room === 'life') {
-      life.join(msg.clientId || clientId, ws);
+      life.join(msg.clientId || clientId, ws, {
+        pid: msg.pid || msg.clientId || clientId,
+        thLevel: msg.thLevel || 1,
+        heroLevel: msg.heroLevel || 1,
+        awaySec: msg.awaySec || 0,
+      });
       return;
     }
     // список открытых комнат для наблюдателей
@@ -178,8 +183,8 @@ function handle(ws, clientId, msg) {
     return;
   }
   if (!ws._authed) return;
-  // команды в комнату
-  const room = rooms.get(msg.room);
+  // команды в комнату ('life' — шард, остальное — комнаты боёв)
+  const room = msg.room === 'life' ? life : rooms.get(msg.room);
   if (room instanceof BattleRoom) {
     if (msg.cmd) room.onCmd(msg.clientId || clientId, msg);
     else if (msg.hash) room.onHash(msg.clientId || clientId, msg.tick, msg.hash);
@@ -189,7 +194,10 @@ function handle(ws, clientId, msg) {
     }
     return;
   }
-  if (room instanceof LifeRoom) return; // заглушка: команд нет
+  if (room instanceof LifeRoom) {
+    if (msg.cmd) room.onCmd(msg.clientId || clientId, msg);
+    return;
+  }
 }
 
 log(`tt-game-server слушает :${PORT} (WSS_URL=${env.WSS_URL || 'не задан'})`);

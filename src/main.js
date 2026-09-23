@@ -1092,7 +1092,57 @@ if (offline.gold > 0) {
   saveMeta(meta);
 }
 const comeback = checkComeback(meta);
-// --- наблюдатель: read-only вьюха из снапшотов с задержкой 30с ---
+// --- MAIN-шард: 2D-карта провинций поверх того же клиента ---
+async function startWorld() {
+  const pid = (meta.clan.name || 'loner').slice(0, 16) || 'loner';
+  const awaySec = Math.floor((Date.now() - (meta.lastSeen || Date.now())) / 1000);
+  const api = {
+    pid, state: { provs: new Map(), events: [], day: 1, online: 0 },
+    onDraw: null,
+    attack(provId) {
+      net.send({ room: 'life', clientId: net.clientId, cmd: 'lifeAttack', prov: provId, heroLevel: meta.hero.level, seq: ++net.seq });
+    },
+  };
+  const net = new NetClient({
+    onOpen: () => {},
+    onSnap: () => {},
+    onEnd: () => {}, onQueue: () => {}, onErr: (m) => {
+      api.state.events.push({ t: Date.now(), text: m.err || m.reason || 'ошибка' });
+      api.onDraw?.();
+    },
+    onReplay: () => {}, onClose: () => {}, onRooms: () => {}, onObserving: () => {},
+  });
+  // mxat: сообщения life (full/diff) складываем в карту
+  const origRoute = net.route.bind(net);
+  net.route = (m) => {
+    if (m.life) {
+      if (m.clientId) net.clientId = m.clientId;
+      if (m.full && m.up) {
+        api.state.provs.clear();
+        for (const p of m.up) api.state.provs.set(p.id, p);
+      } else if (m.up) {
+        for (const p of m.up) api.state.provs.set(p.id, p);
+      }
+      if (m.day) api.state.day = m.day;
+      if (m.online != null) api.state.online = m.online;
+      if (m.events) api.state.events = m.events;
+      if (m.me) api.state.me = m.me;
+      api.onDraw?.();
+      return;
+    }
+    origRoute(m);
+  };
+  try {
+    await net.connect();
+  } catch {
+    return;
+  }
+  net.hello({
+    simVersion: 12, room: 'life', pid,
+    thLevel: meta.capital.thLevel, heroLevel: meta.hero.level, awaySec,
+  });
+  bootUI.showWorld(api, () => location.reload());
+}
 async function startObserve(roomId) {
   sceneEl.innerHTML = '';
   const net = new NetClient({
@@ -1227,6 +1277,7 @@ bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK
   onTrack: (id) => { claimTrack(meta, id, heroesData.maxLevel); },
   onVacation: () => { meta.vacationUntil = Date.now() + 7 * 86400000; saveMeta(meta); },
   onVacationEnd: () => { meta.vacationUntil = 0; saveMeta(meta); },
+  onWorld: () => startWorld(),
   onEquip: (id) => {
     const ix = (meta.hero.inventory || []).findIndex((it) => it.id === id);
     if (ix < 0) return;

@@ -59,7 +59,8 @@ export class GameUI {
           <p class="dim">Уровень столицы: +100🪙 и +50🍞 к старту схватки за уровень.</p>
           ${meta.capital.thLevel < 3
             ? `<button id="mUpTh" ${meta.capital.gold >= cost ? '' : 'disabled'}>Улучшить Ратушу (${cost}🪙)</button>`
-            : '<p>Максимальный уровень</p>'}`;
+            : '<p>Максимальный уровень</p>'}
+          <button id="mWorld">🗺️ Карта мира (онлайн-шард)</button>`;
       } else if (tab === 'hero') {
         const eq = h.gear || {};
         const perks = pendingPerks(meta, ctx.heroesData);
@@ -156,6 +157,8 @@ export class GameUI {
       });
       const up = this.overlay.querySelector('#mUpTh');
       if (up) up.onclick = () => { cb.onCapitalUp(); draw(); };
+      const mw = this.overlay.querySelector('#mWorld');
+      if (mw) mw.onclick = () => { cb.onWorld(); };
       const wv = this.overlay.querySelector('#mVault');
       if (wv) wv.onclick = () => { cb.onVault(); draw(); };
       const wp = this.overlay.querySelector('#mWipe');
@@ -180,8 +183,7 @@ export class GameUI {
     draw();
   }
 
-  showRoomList(rooms, onPick, onBack) {
-    this.overlay.innerHTML = `
+  showRoomList(rooms, onPick, onBack) {    this.overlay.innerHTML = `
       <div class="card">
         <h1>Наблюдение <span>задержка 30с</span></h1>
         ${rooms.length ? rooms.map((r) => `<div class="lrow"><button data-room="${r.room}">${r.mode} • ${r.map} • ${Math.floor(r.t / 60)}:${String(Math.floor(r.t % 60)).padStart(2, '0')} • игроков ${r.players}</button></div>`).join('') : '<p class="dim">Нет открытых матчей. Создайте сетевой матч — он появится здесь.</p>'}
@@ -204,6 +206,68 @@ export class GameUI {
       </div>`;
     this.overlay.classList.remove('hidden');
     this.overlay.querySelector('#exitBtn').onclick = () => location.reload();
+  }
+
+  // Карта MAIN-шарда 16x16 (2D): провинции, столицы, щиты, атака соседних
+  showWorld(api, onExit) {
+    this.overlay.innerHTML = `
+      <div class="card wide">
+        <h1>Карта мира <span id="wDay"></span></h1>
+        <canvas id="wmap" width="384" height="384"></canvas>
+        <div id="winfo" class="dim">Кликните провинцию</div>
+        <div class="lrow"><button id="wAttack" disabled>Атаковать</button><button id="wExitBtn">К столице</button></div>
+        <div id="wfeed"></div>
+      </div>`;
+    this.overlay.classList.remove('hidden');
+    const cv = this.overlay.querySelector('#wmap');
+    const g = cv.getContext('2d');
+    const CELL = 384 / 16;
+    let sel = null;
+    const colors = { center: '#8a6d2f', gold: '#9a8a3f', forest: '#1d4a24', hill: '#6b5d43', plain: '#2d4a2b' };
+    const draw = () => {
+      const st = api.state;
+      this.overlay.querySelector('#wDay').textContent = `день ${st.day || 1} • онлайн ${st.online || 0}`;
+      g.clearRect(0, 0, 384, 384);
+      for (const p of st.provs.values()) {
+        g.fillStyle = p.o ? (p.o === api.pid ? '#2f9dff' : '#d23c2e') : colors[p.type] || '#222';
+        g.fillRect(p.x * CELL + 1, p.z * CELL + 1, CELL - 2, CELL - 2);
+        if (p.cap) {
+          g.fillStyle = '#ffd76a';
+          g.fillRect(p.x * CELL + 8, p.z * CELL + 8, CELL - 16, CELL - 16);
+        }
+        if (p.sh) {
+          g.strokeStyle = '#7ee787';
+          g.strokeRect(p.x * CELL + 2, p.z * CELL + 2, CELL - 4, CELL - 4);
+        }
+        if (sel && sel.id === p.id) {
+          g.strokeStyle = '#fff';
+          g.strokeRect(p.x * CELL + 1, p.z * CELL + 1, CELL - 2, CELL - 2);
+        }
+      }
+      const feed = this.overlay.querySelector('#wfeed');
+      if (feed && st.events) feed.innerHTML = st.events.slice(-3).map((e) => `<div class="ev">${e.text}</div>`).join('');
+    };
+    cv.onclick = (e) => {
+      const r = cv.getBoundingClientRect();
+      const px = Math.floor(((e.clientX - r.left) / r.width) * 16);
+      const pz = Math.floor(((e.clientY - r.top) / r.height) * 16);
+      sel = api.state.provs.get(`p${px}_${pz}`) || null;
+      const info = this.overlay.querySelector('#winfo');
+      const atk = this.overlay.querySelector('#wAttack');
+      if (sel) {
+        info.textContent = `${sel.id} • ${sel.type} • ${sel.o ? (sel.o === api.pid ? 'ваша' : 'враг: ' + sel.o) : 'ничья'}${sel.cap ? ' • столица' : ''}${sel.sh ? ' • щит' : ''}`;
+        atk.disabled = !(sel.o !== api.pid);
+      } else {
+        info.textContent = 'Кликните провинцию';
+        atk.disabled = true;
+      }
+    };
+    this.overlay.querySelector('#wAttack').onclick = () => {
+      if (sel) api.attack(sel.id);
+    };
+    this.overlay.querySelector('#wExitBtn').onclick = () => onExit();
+    api.onDraw = draw;
+    draw();
   }
 
   showLobby(lobby, onStart) {
