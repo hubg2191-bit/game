@@ -1078,6 +1078,93 @@ if (offline.gold > 0) {
   meta.capital.gold += offline.gold;
   saveMeta(meta);
 }
+// --- наблюдатель: read-only вьюха из снапшотов с задержкой 30с ---
+async function startObserve(roomId) {
+  sceneEl.innerHTML = '';
+  const net = new NetClient({
+    onOpen: () => {},
+    onObserving: (m) => {
+      const map = MAPS.find((x) => x.id === (m.map || 'plain')) || MAPS[0];
+      const view = makeView(map.data, m.mode || map.mode, 'nord');
+      window.__state = view;
+      const render = new GameRender(sceneEl, view, palette);
+      const ui = new GameUI(app.querySelector('#hud'), {
+        onRecruit: () => {}, onUpgrade: () => {}, onTrade: () => {}, onGive: () => {},
+        onForgeUp: () => {}, onBuild: () => {}, onStop: () => {}, onSkill: () => {},
+      });
+      ui.buildmenu.style.display = 'none';
+      const keys = {};
+      const canvas = render.renderer.domElement;
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+      let raf = 0;
+      let last = performance.now();
+      const onKey = (e) => {
+        keys[e.code] = true;
+        if (e.code === 'KeyH') {
+          render.controls.target.set(192, 0, 192);
+          render.camera.position.set(192, 80, 260);
+        }
+      };
+      const onKeyUp = (e) => (keys[e.code] = false);
+      addEventListener('keydown', onKey);
+      addEventListener('keyup', onKeyUp);
+      const exit = () => {
+        cancelAnimationFrame(raf);
+        removeEventListener('keydown', onKey);
+        removeEventListener('keyup', onKeyUp);
+        net.close();
+        location.reload();
+      };
+      const frame = () => {
+        raf = requestAnimationFrame(frame);
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, 0.25);
+        last = now;
+        const sp = 40 * dt;
+        const fwd = new THREE.Vector3();
+        render.camera.getWorldDirection(fwd);
+        fwd.y = 0;
+        fwd.normalize();
+        const right = new THREE.Vector3(fwd.z, 0, -fwd.x).negate();
+        const mv = new THREE.Vector3();
+        if (keys.KeyW || keys.ArrowUp) mv.add(fwd);
+        if (keys.KeyS || keys.ArrowDown) mv.sub(fwd);
+        if (keys.KeyD || keys.ArrowRight) mv.add(right);
+        if (keys.ArrowLeft || keys.KeyA) mv.sub(right);
+        if (mv.lengthSq() > 0) {
+          mv.normalize().multiplyScalar(sp);
+          render.camera.position.add(mv);
+          render.controls.target.add(mv);
+        }
+        render.sync(view, { squads: [], building: null }, dt);
+        ui.update(view, { squads: [], building: null });
+      };
+      net.onEvent.onSnap = (m2) => applySnapToView(view, m2);
+      net.onEvent.onEnd = () => {
+        ui.overlay.innerHTML = `<div class="card"><h1>Матч окончен</h1><button onclick="location.reload()">К столице</button></div>`;
+        ui.overlay.classList.remove('hidden');
+        setTimeout(exit, 8000);
+      };
+      net.onEvent.onClose = () => exit();
+      addEventListener('resize', () => render.resize());
+      requestAnimationFrame(frame);
+    },
+    onSnap: () => {},
+    onEnd: () => {},
+    onQueue: () => {},
+    onErr: () => {},
+    onReplay: () => {},
+    onClose: () => {},
+    onRooms: () => {},
+  });
+  try {
+    await net.connect();
+  } catch {
+    location.reload();
+    return;
+  }
+  net.observe(roomId);
+}
 const bootUI = new GameUI(app.querySelector('#hud'), {
   onRecruit: () => {},
   onUpgrade: () => {},
@@ -1095,6 +1182,25 @@ function openLobby() {
       diffs: Object.entries(DIFFS).filter(([id]) => id !== 'passive').map(([id, d]) => ({ id, label: d.label })),
       mmr,
       onOnline: (cfg) => startOnline(cfg, meta),
+      onObserve: async () => {
+        const net = new NetClient({
+          onOpen: () => {},
+          onRooms: (rooms) => {
+            bootUI.showRoomList(rooms, (roomId) => {
+              net.close();
+              startObserve(roomId);
+            }, () => { net.close(); openLobby(); });
+          },
+          onSnap: () => {}, onEnd: () => {}, onQueue: () => {}, onErr: () => {},
+          onReplay: () => {}, onClose: () => {}, onObserving: () => {},
+        });
+        try {
+          await net.connect();
+        } catch {
+          return;
+        }
+        net.listRooms();
+      },
     },
     (cfg) => startMatch(cfg, null, meta)
   );

@@ -150,6 +150,20 @@ export class GameUI {
     draw();
   }
 
+  showRoomList(rooms, onPick, onBack) {
+    this.overlay.innerHTML = `
+      <div class="card">
+        <h1>Наблюдение <span>задержка 30с</span></h1>
+        ${rooms.length ? rooms.map((r) => `<div class="lrow"><button data-room="${r.room}">${r.mode} • ${r.map} • ${Math.floor(r.t / 60)}:${String(Math.floor(r.t % 60)).padStart(2, '0')} • игроков ${r.players}</button></div>`).join('') : '<p class="dim">Нет открытых матчей. Создайте сетевой матч — он появится здесь.</p>'}
+        <button id="backBtn">Назад</button>
+      </div>`;
+    this.overlay.classList.remove('hidden');
+    this.overlay.querySelectorAll('[data-room]').forEach((b) => {
+      b.onclick = () => onPick(b.dataset.room);
+    });
+    this.overlay.querySelector('#backBtn').onclick = () => onBack();
+  }
+
   showMissionEnd(mission, rewardText) {
     this.overlay.innerHTML = `
       <div class="card">
@@ -174,6 +188,7 @@ export class GameUI {
         <p class="dim">Равнина 1v1 • Речная долина 2v2 • Перевал FFA • MMR ${lobby.mmr}</p>
         <button id="startBtn">В бой</button>
         <button id="onlineBtn" title="Сетевой матч через WSS_URL">🌐 В сеть</button>
+        <button id="observeBtn" title="Наблюдать матч с задержкой 30с">👁 Смотреть</button>
       </div>`;
       this.overlay.classList.remove('hidden');
       this.overlay.querySelectorAll('[data-k]').forEach((btn) => {
@@ -193,6 +208,12 @@ export class GameUI {
         ob.onclick = () => {
           this.overlay.classList.add('hidden');
           lobby.onOnline(cfg);
+        };
+      }
+      const ow = this.overlay.querySelector('#observeBtn');
+      if (ow && lobby.onObserve) {
+        ow.onclick = () => {
+          lobby.onObserve(cfg);
         };
       }
     };

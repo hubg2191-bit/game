@@ -106,6 +106,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     for (const [, room] of rooms) {
       if (room.leave) room.leave(clientId);
+      if (room.leaveObserver) room.leaveObserver(clientId);
     }
     const qi = queue.findIndex((q) => q.clientId === clientId);
     if (qi >= 0) queue.splice(qi, 1);
@@ -139,7 +140,29 @@ function handle(ws, clientId, msg) {
       life.join(msg.clientId || clientId, ws);
       return;
     }
-    // новая игра: в очередь
+    // список открытых комнат для наблюдателей
+    if (msg.listRooms) {
+      send(ws, {
+        rooms: [...rooms.values()]
+          .filter((r) => r instanceof BattleRoom)
+          .map((r) => ({
+            room: r.id, mode: r.mode, map: r.map.name || r.map.id,
+            t: Math.floor(r.state?.t || 0),
+            players: [...r.clients.values()].filter((c) => !c.goneAt).length,
+            over: !!r.state?.over,
+          })),
+      });
+      return;
+    }
+    // наблюдатель: снапшоты с задержкой 30с, команд нет
+    if (msg.observe) {
+      const room = rooms.get(msg.observe);
+      if (room instanceof BattleRoom) room.joinObserver(msg.clientId || clientId, ws);
+      else send(ws, { err: 'no_room' });
+      return;
+    }
+    // новая игра: в очередь (только по явному запросу с mode)
+    if (!msg.mode) return;
     queue.push({
       clientId, ws,
       mode: msg.mode === '2v2' ? '2v2' : msg.mode === 'ffa' ? 'ffa' : '1v1',

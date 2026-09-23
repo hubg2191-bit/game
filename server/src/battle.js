@@ -11,6 +11,7 @@ export class BattleRoom {
   constructor({ mode, mapId, seed, heroes, store, onClose, log }) {
     this.id = `battle-${roomSeq++}`;
     this.mode = mode; // 1v1 | 2v2 | ffa
+    this.mapId = mapId;
     this.map = data.maps[mapId] || data.maps.plain;
     this.seed = seed ?? Math.floor(Math.random() * 1e9);
     this.heroes = heroes; // heroes.json для симов
@@ -18,6 +19,8 @@ export class BattleRoom {
     this.onClose = onClose;
     this.log = log || (() => {});
     this.clients = new Map(); // clientId -> {ws, pid, lastSent, lastEventT, limiter, misses, goneAt, hashTick}
+    this.observers = new Map(); // clientId -> {ws, idx} — снапшоты с задержкой 30с (анти-стримснайп)
+    this.hist = []; // {tick, snap} полные без тумана каждую 1с сима, до 40 шт
     this.pidOf = new Map(); // clientId -> pid
     this.orderLog = []; // реплей: {tick, pid, cmd}
     this.hashRing = new Map(); // tick -> hash
@@ -89,8 +92,35 @@ export class BattleRoom {
     sim.spawnHero(this.state, pid, setup.arch, setup.level, setup.gear, setup.perks || []);
   }
 
-  teamOf(pid) {
-    return sim.teamOf(this.state, pid);
+  joinObserver(clientId, ws) {
+    this.observers.set(clientId, { ws, idx: 0 });
+    this.send(ws, { observing: true, room: this.id, delaySec: 30, mode: this.mode, map: this.mapId });
+  }
+
+  leaveObserver(clientId) {
+    this.observers.delete(clientId);
+  }
+
+  tickObservers() {
+    // пишем историю каждую 1с сима
+    const s = this.state;
+    if (!this.lastHistT || s.t - this.lastHistT >= 1) {
+      this.lastHistT = s.t;
+      this.hist.push({ tick: s.tick, snap: fullSnap(s, 'player', SIM_VERSION, true) });
+      if (this.hist.length > 40) this.hist.shift();
+    }
+    // раздаём с задержкой 30с: шлём записи старше 30с сима
+    for (const [cid, o] of this.observers) {
+      while (o.idx < this.hist.length && s.t - this.hist[o.idx].snap.t >= 30) {
+        this.send(o.ws, this.hist[o.idx].snap);
+        o.idx++;
+      }
+      // чистим отправленное с начала, сдвигаем курсоры
+      while (this.hist.length && this.hist[0].tick < s.tick - 45 * 15) {
+        this.hist.shift();
+        for (const [, x] of this.observers) x.idx = Math.max(0, x.idx - 1);
+      }
+    }
   }
 
   join(clientId, ws, pid, hero) {
@@ -237,9 +267,9 @@ export class BattleRoom {
       }
       this.fogDue = false;
     }
+    this.tickObservers();
     // хеш каждые 5 сек
-    if (now - this.lastHashAt > 5000) {
-      this.lastHashAt = now;
+    if (now - this.lastHashAt > 5000) {      this.lastHashAt = now;
       const h = sim.hashState(s);
       this.hashRing.set(s.tick, h);
       if (this.hashRing.size > 600) {
@@ -248,8 +278,7 @@ export class BattleRoom {
       }
     }
     // конец: победа/40 мин/все ушли+90с
-    if (s.over && !this.over) {
-      this.over = true;
+    if (s.over && !this.over) {      this.over = true;
       this.overAt = now;
       this.finish();
     }
@@ -306,7 +335,13 @@ export class BattleRoom {
         c.ws.close();
       } catch { /* ignore */ }
     }
+    for (const [, o] of this.observers) {
+      try {
+        o.ws.close();
+      } catch { /* ignore */ }
+    }
     this.clients.clear();
+    this.observers.clear();
     this.onClose(this.id);
   }
 }

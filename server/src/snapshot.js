@@ -43,18 +43,18 @@ function serBuilding(b) {
 }
 
 // Полный отфильтрованный снапшот для pid. Туман должен быть посчитан
-// updateFog(state, team) под сторону pid ДО вызова.
-export function fullSnap(state, pid, simVersion) {
+// updateFog(state, team) под сторону pid ДО вызова. noFog=true — всё как есть (наблюдатель).
+export function fullSnap(state, pid, simVersion, noFog = false) {
   const squads = [];
   for (const s of state.squads) {
     if (s.count <= 0) continue;
-    if (!sim.isVisibleFor(state, s, pid)) continue;
+    if (!noFog && !sim.isVisibleFor(state, s, pid)) continue;
     squads.push(serSquad(s, pid, state));
   }
   const buildings = [];
   for (const b of state.buildings) {
     if (b.hp <= 0) continue;
-    if (!sim.isVisibleFor(state, b, pid)) continue;
+    if (!noFog && !sim.isVisibleFor(state, b, pid)) continue;
     buildings.push(serBuilding(b));
   }
   const snap = {

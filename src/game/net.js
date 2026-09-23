@@ -48,6 +48,15 @@ export class NetClient {
     this.send({ hello: true, ...opts });
   }
 
+  listRooms() {
+    this.send({ hello: true, simVersion: 12, listRooms: true });
+  }
+
+  observe(roomId) {
+    this.room = roomId;
+    this.send({ hello: true, simVersion: 12, observe: roomId, clientId: this.clientId });
+  }
+
   cmd(cmd) {
     // cmd: {cmd, ...} по protocol.md; seq + ретрай при потере ack (sync.md: приказы не теряются)
     const seq = ++this.seq;
@@ -91,6 +100,8 @@ export class NetClient {
     if (m.snap !== undefined || m.full) this.onEvent.onSnap?.(m);
     if (m.end) this.onEvent.onEnd?.(m);
     if (m.queued) this.onEvent.onQueue?.(m);
+    if (m.rooms) this.onEvent.onRooms?.(m.rooms);
+    if (m.observing) this.onEvent.onObserving?.(m);
     if (m.err || m.kick) this.onEvent.onErr?.(m);
     if (m.replay) this.onEvent.onReplay?.(m);
   }
