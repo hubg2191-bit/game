@@ -21,8 +21,9 @@ export class GameRender {
     this.worldSize = state.map.size_m * WORLD_SCALE;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a2436);
-    this.scene.fog = new THREE.Fog(0x1a2436, 260, 620);
+    // светлый фон 2.5D (было 0x1a2436 — темно); туман в цвет фона
+    this.scene.background = new THREE.Color(0x5f6f8f);
+    this.scene.fog = new THREE.Fog(0x5f6f8f, 260, 620);
 
     // 2.5D лок: орто-изометрия 45°, без вращения (style-lock.md)
     const frustum = 150;
@@ -350,11 +351,20 @@ export class GameRender {
     switch (type) {
       case 'townhall': return { w: 9, h: 6, d: 9 };
       case 'barracks': return { w: 7, h: 4, d: 5 };
+      case 'shooting_range': return { w: 7, h: 3, d: 5 };
       case 'tower': return { w: 3, h: 10, d: 3 };
       case 'house': return { w: 4, h: 3, d: 4 };
+      case 'warehouse': return { w: 6, h: 3, d: 5 };
       case 'farm': return { w: 6, h: 1.5, d: 6 };
-      case 'wall': return { w: 1.9, h: 2.6, d: 1.0 };
       case 'mill': return { w: 3, h: 9, d: 3 };
+      case 'forge': return { w: 5, h: 3.5, d: 5 };
+      case 'stable': case 'tabun_kaganat': return { w: 8, h: 4, d: 6 };
+      case 'siege_workshop': return { w: 8, h: 4, d: 6 };
+      case 'hall_nord': return { w: 10, h: 5, d: 6 };
+      case 'guild_league': return { w: 6, h: 4, d: 5 };
+      case 'sawmill': return { w: 6, h: 3, d: 5 };
+      case 'quarry': return { w: 5, h: 2, d: 5 };
+      case 'wall': return { w: 1.9, h: 2.6, d: 1.0 };
       case 'temple': return { w: 5, h: 4, d: 5 };
       case 'market': return { w: 6, h: 3, d: 5 };
       case 'mine': return { w: 5, h: 2.5, d: 5 };
@@ -362,11 +372,45 @@ export class GameRender {
     }
   }
 
-  // акцентные детали по типу (купол храма, лопасти мельницы, труба пекарни)
-  decorateBuilding(g, type, w, h, d, owner) {
+  // общие материалы декора (1 на всех — без аллокаций в кадре)
+  decoMat(color, emissive = 0) {
+    const key = `${color}:${emissive}`;
+    if (!this.decoMats) this.decoMats = {};
+    if (!this.decoMats[key]) {
+      this.decoMats[key] = new THREE.MeshStandardMaterial({ color, roughness: 0.9, emissive, emissiveIntensity: emissive ? 0.9 : 0 });
+    }
+    return this.decoMats[key];
+  }
+
+  // крыша по типу: пирамида / плоская плита (ратуша) / низкая двускатная-имитация
+  roofFor(g, type, w, h, d, roofMat) {
+    if (type === 'farm') return; // грядки вместо крыши
+    if (type === 'townhall') {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.5, d + 0.6), roofMat);
+      slab.position.y = h + 0.25;
+      g.add(slab);
+      return;
+    }
+    const squash = type === 'warehouse' || type === 'sawmill' ? 0.4 : 0.7;
+    const roof = new THREE.Mesh(
+      new THREE.ConeGeometry(Math.max(w, d) * 0.72, h * squash, 4),
+      roofMat
+    );
+    roof.position.y = h + (h * squash) / 2;
+    roof.rotation.y = Math.PI / 4;
+    g.add(roof);
+  }
+
+  // акцентные детали по типу + уровневые пристройки (ур.2 — боковой пристрой,
+  // ур.3 — башенка/флаг). Лимит: 2-3 мешей на здание, иначе calls улетят за бюджет.
+  decorateBuilding(g, type, w, h, d, owner, level = 1) {
+    const wood = this.decoMat(0x6b4a2f);
+    const stone = this.decoMat(0x9aa0a8);
+    const teamHex = this.teamHexOf(owner);
+    const team = this.decoMat(teamHex);
     if (type === 'mill') {
       const blades = new THREE.Group();
-      const mat = new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.9 });
+      const mat = this.decoMat(0xe8e0cc);
       for (let i = 0; i < 4; i++) {
         const arm = new THREE.Group();
         const blade = new THREE.Mesh(new THREE.BoxGeometry(0.5, 5.5, 0.2), mat);
@@ -378,42 +422,153 @@ export class GameRender {
       blades.position.set(0, h - 1, d / 2 + 0.4);
       g.add(blades);
       g.userData.blades = blades;
+    } else if (type === 'townhall') {
+      // второй этаж-ступень + флаг фракции 6м
+      const step = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, h * 0.4, d * 0.6), this.decoMat(0xd9c9a3));
+      step.position.y = h + 0.4;
+      g.add(step);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 6, 6), wood);
+      pole.position.set(w / 4, h + 3, -d / 4);
+      const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.0), new THREE.MeshBasicMaterial({ color: teamHex, side: THREE.DoubleSide }));
+      flag.position.set(w / 4 + 0.85, h + 5.2, -d / 4);
+      g.add(pole, flag);
     } else if (type === 'temple') {
       const dome = new THREE.Mesh(
         new THREE.SphereGeometry(Math.max(w, d) * 0.4, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-        new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.5, metalness: 0.4 })
+        this.decoMat(0xffd76a)
       );
       dome.position.y = h;
       g.add(dome);
-    } else if (type === 'bakery') {
-      const chimney = new THREE.Mesh(
-        new THREE.BoxGeometry(1, 3, 1),
-        new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 1 })
-      );
+    } else if (type === 'bakery' || type === 'house' || type === 'forge') {
+      const chimney = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), stone);
       chimney.position.set(w / 4, h + 1, 0);
       g.add(chimney);
+      if (type === 'forge') {
+        // горн-свечение
+        const glow = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.0, 0.3), this.decoMat(0xff7722, 0xff5511));
+        glow.position.set(-w / 4, 0.8, d / 2 + 0.1);
+        g.add(glow);
+      }
     } else if (type === 'market') {
       const awning = new THREE.Mesh(
         new THREE.BoxGeometry(w + 1, 0.4, d + 1),
-        new THREE.MeshStandardMaterial({ color: owner === 'player' || owner === 'ally' ? 0xe8b400 : 0xd23c2e, roughness: 0.9 })
+        this.decoMat(owner === 'player' || owner === 'ally' ? 0xe8b400 : 0xd23c2e)
       );
       awning.position.y = h + 0.6;
-      g.add(awning);
-    } else if (type === 'mine') {
-      const beams = new THREE.Mesh(
-        new THREE.BoxGeometry(w * 0.7, h * 1.6, 0.6),
-        new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 })
-      );
+      // прилавок с флажком
+      const stall = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.0, 1.2), wood);
+      stall.position.set(-w / 2 - 1.4, 0.5, d / 2);
+      g.add(awning, stall);
+    } else if (type === 'mine' || type === 'quarry') {
+      const beams = new THREE.Mesh(new THREE.BoxGeometry(w * 0.7, h * 1.6, 0.6), wood);
       beams.position.y = h * 0.8;
       beams.rotation.z = 0.5;
-      g.add(beams);
+      // штабель блоков
+      const blocks = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.2, 1.4), stone);
+      blocks.position.set(w / 2 + 1.2, 0.6, d / 2);
+      g.add(beams, blocks);
+    } else if (type === 'farm') {
+      // грядки-ряды вместо крыши
+      for (let i = -1; i <= 1; i++) {
+        const bed = new THREE.Mesh(new THREE.BoxGeometry(w * 0.8, 0.25, 0.9), this.decoMat(0x4a6b2f));
+        bed.position.set(0, h + 0.1, i * 1.6);
+        g.add(bed);
+      }
+    } else if (type === 'warehouse') {
+      // ящики-стопка у сарая
+      const c1 = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), wood);
+      c1.position.set(w / 2 + 1, 0.7, 0);
+      const c2 = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 1.0), wood);
+      c2.position.set(w / 2 + 1, 1.9, 0.2);
+      g.add(c1, c2);
+    } else if (type === 'barracks' || type === 'shooting_range') {
+      // стойка с оружием + мишень у стрельбища
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.2, 0.25), wood);
+      post.position.set(w / 2 + 1.2, 1.1, 0);
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 2.0), wood);
+      bar.position.set(w / 2 + 1.2, 1.9, 0);
+      g.add(post, bar);
+      if (type === 'shooting_range') {
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.15, 10), this.decoMat(0xd23c2e));
+        disc.rotation.x = Math.PI / 2;
+        disc.position.set(w / 2 + 1.2, 1.1, 2.2);
+        g.add(disc);
+      }
+    } else if (type === 'stable' || type === 'tabun_kaganat') {
+      // загон: 2 жерди + стог
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.18, 0.18), wood);
+      rail.position.set(0, 1.1, d / 2 + 1.6);
+      const hay = new THREE.Mesh(new THREE.ConeGeometry(1.1, 1.8, 8), this.decoMat(0xc9a94a));
+      hay.position.set(w / 2 + 1.2, 0.9, d / 2 + 1);
+      g.add(rail, hay);
+    } else if (type === 'sawmill') {
+      // штабель брёвен
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 3.2, 8), wood);
+      log.rotation.z = Math.PI / 2;
+      log.position.set(w / 2 + 1.4, 0.4, 0);
+      g.add(log);
+    } else if (type === 'tower') {
+      // зубцы + вымпел
+      const top = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.6, d + 0.5), stone);
+      top.position.y = h + 0.3;
+      const penn = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.7), new THREE.MeshBasicMaterial({ color: teamHex, side: THREE.DoubleSide }));
+      penn.position.set(0.6, h + 1.6, 0);
+      g.add(top, penn);
+    } else if (type === 'hall_nord') {
+      // рога над входом + кострище
+      const hornL = new THREE.Mesh(new THREE.ConeGeometry(0.3, 1.4, 6), this.decoMat(0xe8e0cc));
+      hornL.position.set(-1.2, h + 0.8, d / 2 + 0.2);
+      hornL.rotation.z = 0.5;
+      const fire = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.8), this.decoMat(0xff7722, 0xff5511));
+      fire.position.set(0, 0.3, d / 2 + 2.2);
+      g.add(hornL, fire);
+    } else if (type === 'guild_league') {
+      // весы: столб + коромысло + золотой блеск
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.4, 0.25), wood);
+      post.position.set(0, h + 1.2, d / 2 + 1);
+      const gold = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.7), this.decoMat(0xe8b400, 0x664400));
+      gold.position.set(0, h + 0.4, d / 2 + 1);
+      g.add(post, gold);
+    } else if (type === 'siege_workshop') {
+      // кран-балка + колесо
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 5.5), wood);
+      beam.position.set(-w / 4, h + 1.2, 0.5);
+      beam.rotation.x = -0.35;
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.3, 10), wood);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(w / 2 + 1, 0.9, 0);
+      g.add(beam, wheel);
+    }
+    // уровневые пристройки: ур.2 — боковой пристрой, ур.3 — угловая башенка
+    if (level >= 2 && type !== 'wall' && type !== 'farm') {
+      const ax = new THREE.Mesh(new THREE.BoxGeometry(w * 0.45, h * 0.55, d * 0.5), this.decoMat(0xd9c9a3));
+      ax.position.set(w / 2 + (w * 0.45) / 2 - 0.2, (h * 0.55) / 2, -d / 4);
+      const axRoof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w * 0.45, d * 0.5) * 0.72, 1.2, 4), stone);
+      axRoof.position.set(ax.position.x, h * 0.55 + 0.6, -d / 4);
+      axRoof.rotation.y = Math.PI / 4;
+      g.add(ax, axRoof);
+    }
+    if (level >= 3 && type !== 'wall') {
+      const tur = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.0, 3.2, 8), stone);
+      tur.position.set(-w / 2 - 0.6, 1.6, -d / 2 - 0.6);
+      const turRoof = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.4, 8), team);
+      turRoof.position.set(-w / 2 - 0.6, 3.9, -d / 2 - 0.6);
+      g.add(tur, turRoof);
     }
   }
 
   syncBuilding(b, bdef) {
     let g = this.bMeshes.get(b.id);
+    const lv = b.level || 1;
+    // уровень сменился — перестроить (пристройки/башенка)
+    if (g && g.userData.lv !== lv) {
+      this.dyn.remove(g);
+      this.bMeshes.delete(b.id);
+      g = null;
+    }
     if (!g && b.hp > 0) {
       g = new THREE.Group();
+      g.userData.lv = lv;
       const { w, h, d } = this.buildingSize(b.type);
       if (b.type === 'wall') {
         const stone = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 1 });
@@ -428,17 +583,27 @@ export class GameRender {
           new THREE.MeshStandardMaterial({ color: 0xd9c9a3, roughness: 0.9 })
         );
         body.position.y = h / 2;
-        const roof = new THREE.Mesh(
-          new THREE.ConeGeometry(Math.max(w, d) * 0.72, h * 0.7, 4),
+        this.roofFor(g, b.type, w, h, d,
           (this.roofMats[{ nord: 'nord', kaganat: 'kaganat', league: 'league' }[this.state.raceOf?.[b.owner]] || 'nord']).clone()
         );
-        roof.position.y = h + h * 0.35;
-        roof.rotation.y = Math.PI / 4;
         const banner = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, h * 0.9, d + 0.3), this.teamMat(b.owner));
         banner.position.y = h / 2;
-        g.add(body, roof, banner);
-        this.decorateBuilding(g, b.type, w, h, d, b.owner);
+        g.add(body, banner);
+        this.decorateBuilding(g, b.type, w, h, d, b.owner, lv);
       }
+      // леса стройки (buildings-visual: стройка = леса-боксы)
+      const scaf = new THREE.Group();
+      const poleM = this.decoMat(0x8a6f4d);
+      for (const [px, pz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const pole = new THREE.Mesh(new THREE.BoxGeometry(0.25, h + 2, 0.25), poleM);
+        pole.position.set(px * (w / 2 + 0.5), (h + 2) / 2, pz * (d / 2 + 0.5));
+        scaf.add(pole);
+      }
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 1.4, 0.25, d + 1.4), poleM);
+      frame.position.y = h + 1.8;
+      scaf.add(frame);
+      g.add(scaf);
+      g.userData.scaf = scaf;
       g.position.set(b.x, 0, b.z);
       g.traverse((o) => { if (o.isMesh) o.userData.entity = { kind: 'building', id: b.id }; });
       this.dyn.add(g);
@@ -450,6 +615,7 @@ export class GameRender {
       const progress = b.buildT > 0 ? 1 - b.buildT / total : 1;
       g.scale.setScalar(0.3 + 0.7 * progress);
       if (g.userData.blades && b.hp > 0 && b.buildT <= 0) g.userData.blades.rotation.z += 0.02;
+      if (g.userData.scaf) g.userData.scaf.visible = b.buildT > 0;
       g.traverse((o) => {
         if (o.isMesh) o.userData.entity = { kind: 'building', id: b.id };
       });
