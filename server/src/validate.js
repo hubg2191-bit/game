@@ -84,6 +84,11 @@ export function validateCmd(state, pid, msg) {
     case 'give': {
       const hasMarket = state.buildings.some((b) => b.owner === pid && b.type === 'market' && b.hp > 0 && b.buildT <= 0);
       if (!hasMarket) return { err: 'invalid' };
+      if (msg.cmd === 'give') {
+        if (!['wood', 'stone', 'iron', 'food'].includes(msg.res)) return { err: 'invalid' };
+        if (typeof msg.amount !== 'number' || msg.amount < 50 || msg.amount > 500) return { err: 'invalid' };
+        if ((state.players[pid].res[msg.res] || 0) < msg.amount) return { err: 'no_gold' };
+      }
       return { ok: true };
     }
     case 'forge': {
@@ -139,7 +144,7 @@ export function applyCmd(state, pid, msg) {
     case 'trade':
       return sim.trade(state, pid) > 0;
     case 'give':
-      return sim.giveAlly(state, pid);
+      return sim.giveAlly(state, pid, msg.res || 'wood', msg.amount || 200);
     case 'forge':
       return sim.forgeUpgrade(state, pid, msg.b);
     default:

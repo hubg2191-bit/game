@@ -127,9 +127,10 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       if (isReplay || !throttle()) return;
       if (trade(state, 'player')) record('trade', ['player']);
     },
-    onGive: () => {
+    onGive: (bId, res) => {
       if (isReplay || !throttle()) return;
-      if (giveAlly(state, 'player')) record('give', ['player']);
+      const amount = res === 'wood' ? 200 : 100;
+      if (giveAlly(state, 'player', res, amount)) record('give', ['player', res, amount]);
     },
     onForgeUp: (bId) => {
       if (isReplay || !throttle()) return;
@@ -424,7 +425,7 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     construct: (a) => construct(state, a[0], a[1], a[2], a[3]),
     upgrade: (a) => upgrade(state, a[0], a[1]),
     trade: (a) => trade(state, a[0]),
-    give: (a) => giveAlly(state, a[0]),
+    give: (a) => giveAlly(state, a[0], a[1] || 'wood', a[2] || 200),
     forgeUp: (a) => forgeUpgrade(state, a[0], a[1]),
     directive: (a) => setDirective(state, a[0]),
     skill: (a) => {
@@ -753,7 +754,7 @@ async function startOnline(lobbyCfg, meta) {
     },
     onGive: () => {
       if (!throttle()) return;
-      net.cmd({ cmd: 'give' });
+      net.cmd({ cmd: 'give', res: 'wood', amount: 200 });
       ordersSent++;
     },
     onForgeUp: (bId) => {

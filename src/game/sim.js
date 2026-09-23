@@ -622,17 +622,17 @@ export function upgrade(state, pid, buildingId) {
   event(state, `Улучшается Ратуша до ур.${b.level + 1}`);
   return true;
 }
-// Кнопка рынка 2v2: отдать союзнику 200 дерева (03-resources)
-export function giveAlly(state, pid) {
+// Кнопка рынка 2v2: отдать союзнику ресурсы (03-resources: передаваемость — да)
+export function giveAlly(state, pid, res = 'wood', amount = 200) {
   const hasMarket = state.buildings.some((b) => b.owner === pid && b.type === 'market' && b.hp > 0 && b.buildT <= 0);
   const ally = state.pids.find((q) => q !== pid && sameTeam(state, q, pid) && q !== 'neutral');
   if (!hasMarket || !ally) return false;
   const p = state.players[pid];
-  if ((p.res.wood || 0) < 200) return false;
-  p.res.wood -= 200;
+  if ((p.res[res] || 0) < amount) return false;
+  p.res[res] -= amount;
   const a = state.players[ally];
-  a.res.wood = Math.min(capOf(state, ally, 'wood'), a.res.wood + 200);
-  if (pid === 'player') event(state, 'Отдано союзнику: 200 дерева', 'flag');
+  a.res[res] = Math.min(capOf(state, ally, res), a.res[res] + amount);
+  if (pid === 'player') event(state, `Отдано союзнику: ${amount} ${res}`, 'flag');
   return true;
 }
 export function setDirective(state, d) {

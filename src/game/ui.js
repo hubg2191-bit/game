@@ -100,6 +100,7 @@ export class GameUI {
         body = `
           <div class="lrow"><span>Клан:</span><input id="clanName" value="${meta.clan.name || ''}" placeholder="Название клана" maxlength="24"/></div>
           <p>Казна клана: <b>${Math.floor(meta.clan.vault)}🪙</b> <span class="dim">(10% с наград боёв)</span></p>
+          <p>Очки сезона: <b>${meta.clan.points || 0}</b> <span class="dim">(победа 100 / поражение 30)</span></p>
           <button id="mVault">Забрать в казну столицы</button>
           <p class="dim">Союзники-боты в 2v2 — члены вашего клана.</p>`;
       } else {
@@ -364,7 +365,9 @@ export class GameUI {
         const rate = Math.round(tradeRate(state, me));
         html += `<button data-trade ${r.wood >= 100 ? '' : 'disabled'}>Обменять 100🪵 → ${rate}🪙</button>`;
         if (state.pids.some((q) => q !== me && teamOf(state, q) === teamOf(state, me))) {
-          html += `<button data-give ${r.wood >= 200 ? '' : 'disabled'}>Отдать союзнику 200🪵</button>`;
+          html += `<button data-give="wood" ${r.wood >= 200 ? '' : 'disabled'}>Союзнику 200🪵</button>`;
+          html += `<button data-give="stone" ${r.stone >= 100 ? '' : 'disabled'}>Союзнику 100🪨</button>`;
+          html += `<button data-give="iron" ${r.iron >= 100 ? '' : 'disabled'}>Союзнику 100⛓️</button>`;
         }
       }
       if (b.type === 'forge' && b.buildT <= 0) {
@@ -391,8 +394,10 @@ export class GameUI {
       if (upBtn) upBtn.onclick = () => this.cb.onUpgrade(b.id);
       const trBtn = this.panel.querySelector('[data-trade]');
       if (trBtn) trBtn.onclick = () => this.cb.onTrade(b.id);
-      const gvBtn = this.panel.querySelector('[data-give]');
-      if (gvBtn) gvBtn.onclick = () => this.cb.onGive(b.id);
+      const gvBtns = this.panel.querySelectorAll('[data-give]');
+      gvBtns.forEach((btn) => {
+        btn.onclick = () => this.cb.onGive(b.id, btn.dataset.give);
+      });
       const fgBtn = this.panel.querySelector('[data-forge]');
       if (fgBtn) fgBtn.onclick = () => this.cb.onForgeUp(b.id);
       return;

@@ -8,7 +8,7 @@ export function defaultMeta() {
     hero: { arch: 'warlord', level: 1, xp: 0, gear: {}, inventory: [], perks: [] },
     stats: { kills: 0, built: 0, marks: 0 },
     quests: { date: new Date().toISOString().slice(0, 10), prog: {}, done: [] },
-    clan: { name: '', vault: 0 },
+    clan: { name: '', vault: 0, points: 0 },
     season: { day: 1, battlesToday: 0, date: new Date().toISOString().slice(0, 10) },
     lastSeen: Date.now(),
   };
@@ -152,6 +152,7 @@ export function applyBattleResult(m, { win, xp, goldEarned, maxLevel = 15 }) {
   const vaultCut = Math.floor(rw.gold * 0.1); // налог клана 10%
   m.capital.gold += rw.gold - vaultCut + goldEarned;
   m.clan.vault += vaultCut;
+  m.clan.points = (m.clan.points || 0) + (win ? 100 : 30); // очки сезона (season-structure)
   // опыт герою
   const h = m.hero;
   h.xp += rw.xp + xp;
@@ -165,6 +166,7 @@ export function applyBattleResult(m, { win, xp, goldEarned, maxLevel = 15 }) {
 export function wipeSeason(m) {  // вайп дня 91 (ручной): столица жмётся, герои/шмот/золото/MMR остаются
   const keepGold = Math.min(5000, m.capital.gold);
   m.capital = { thLevel: 1, gold: keepGold };
+  m.clan.points = 0; // очки клана в 0
   m.season = { day: 1, battlesToday: 0, date: new Date().toISOString().slice(0, 10) };
   saveMeta(m);
 }
