@@ -17,6 +17,8 @@ const maps = {
   plain: read('data/maps/skirmish-plain.json'),
   river: read('data/maps/skirmish-river.json'),
   pass: read('data/maps/skirmish-pass.json'),
+  hills: read('data/maps/skirmish-hills.json'),
+  gold: read('data/maps/skirmish-gold.json'),
 };
 
 export const data = { units, bdefs, races, heroes, netcode, maps };

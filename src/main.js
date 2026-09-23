@@ -23,10 +23,14 @@ import questsData from './game/data/quests.json';
 import mapPlain from './game/data/maps/skirmish-plain.json';
 import mapRiver from './game/data/maps/skirmish-river.json';
 import mapPass from './game/data/maps/skirmish-pass.json';
+import mapHills from './game/data/maps/skirmish-hills.json';
+import mapGold from './game/data/maps/skirmish-gold.json';
 
 const MAPS = [
   { id: 'plain', name: 'Равнина 1v1', data: mapPlain, mode: '1v1' },
+  { id: 'hills', name: 'Холмы 1v1', data: mapHills, mode: '1v1' },
   { id: 'river', name: 'Речная долина 2v2', data: mapRiver, mode: '2v2' },
+  { id: 'gold', name: 'Золотая жила 2v2', data: mapGold, mode: '2v2' },
   { id: 'pass', name: 'Перевал FFA', data: mapPass, mode: 'ffa' },
 ];
 const rules = unitsData.rules;

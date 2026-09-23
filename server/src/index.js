@@ -171,7 +171,7 @@ function handle(ws, clientId, msg) {
     queue.push({
       clientId, ws,
       mode: msg.mode === '2v2' ? '2v2' : msg.mode === 'ffa' ? 'ffa' : '1v1',
-      map: ['plain', 'river', 'pass'].includes(msg.map) ? msg.map : 'plain',
+      map: ['plain', 'hills', 'river', 'gold', 'pass'].includes(msg.map) ? msg.map : 'plain',
       race: msg.race || 'nord',
       hero: msg.hero || null,
       mmr: msg.mmr || 1000,

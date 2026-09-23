@@ -1,0 +1,27 @@
+{
+  "id": "skirmish_gold_v1",
+  "name": "Золотая жила",
+  "size_m": 1536,
+  "tile_m": 4,
+  "spawns": [
+    { "team": 0, "x": 300, "z": 300 }, { "team": 0, "x": 300, "z": 1236 },
+    { "team": 1, "x": 1236, "z": 300 }, { "team": 1, "x": 1236, "z": 1236 }
+  ],
+  "provinces": [
+    { "id": "west", "x": 400, "z": 768, "type": "forest", "buff": "wood+15%", "capSec": 120 },
+    { "id": "center", "x": 768, "z": 768, "type": "gold", "buff": "gold+10%", "capSec": 120 },
+    { "id": "east", "x": 1136, "z": 768, "type": "hill", "buff": "iron+15%", "capSec": 120 }
+  ],
+  "hills": [{ "x": 1136, "z": 768, "h": 4 }],
+  "mines": [
+    { "x": 300, "z": 450 }, { "x": 300, "z": 1086 },
+    { "x": 1236, "z": 450 }, { "x": 1236, "z": 1086 },
+    { "x": 700, "z": 768 }, { "x": 836, "z": 768 }
+  ],
+  "camps": [
+    { "type": "bandits", "x": 700, "z": 700 }, { "type": "bandits", "x": 836, "z": 836 },
+    { "type": "wolves", "x": 400, "z": 400 }, { "type": "wolves", "x": 1136, "z": 1136 }
+  ],
+  "winScore": 1000,
+  "scorePerSec": { "1flag": 5, "2flags": 12, "3flags": 20 }
+}
