@@ -670,11 +670,13 @@ function makeView(mapData, mode, race) {
     : mode === 'ffa' ? ['player', 'enemy1', 'enemy2', 'enemy3'] : ['player', 'bot'];
   const teamMap = mode === 'ffa' ? Object.fromEntries(pids.map((p) => [p, p]))
     : mode === '2v2' ? { player: 'A', ally: 'A', enemy1: 'B', enemy2: 'B' } : { player: 'A', bot: 'B' };
+  const zeroRes = () => ({ food: 0, wood: 0, stone: 0, iron: 0, gold: 0, popUsed: 0, popMax: 0, morale: 70 });
   return {
-    map: mapData, mode, pids, teamMap,
+    map: mapData, mode, pids, teamMap, me: 'player',
     raceOf: { player: race }, racesData, units: unitsData, bdefs: buildingsData,
     t: 0, tick: 0, phase: 'build', over: false, winner: null, reason: '',
-    players: { player: { id: 'player', res: { food: 0, wood: 0, stone: 0, iron: 0, gold: 0, popUsed: 0, popMax: 0, morale: 70 } } },
+    players: Object.fromEntries(pids.map((p) => [p, { id: p, res: zeroRes() }])),
+    upgrades: Object.fromEntries(pids.map((p) => [p, { forge: 0 }])),
     upgrades: { player: { forge: 0 } },
     squads: [], buildings: [],
     flags: (mapData.provinces || []).map((p) => ({ id: p.id, x: m(p.x), z: m(p.z), type: p.type, buff: p.buff, owner: null, progress: 0 })),
@@ -706,6 +708,7 @@ async function startOnline(lobbyCfg, meta) {
   const map = MAPS.find((m) => m.id === lobbyCfg.map) || MAPS[0];
   const view = makeView(map.data, map.mode, lobbyCfg.race);
   window.__state = view;
+  const me = () => view.me || 'player'; // свой pid (в 1v1-паре может быть 'bot')
   const render = new GameRender(sceneEl, view, palette);
   const sel = { squads: [], building: null };
   const groups = {};
@@ -774,7 +777,7 @@ async function startOnline(lobbyCfg, meta) {
         ui.pendingSkill = null;
         return;
       }
-      const h = view.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
+      const h = view.squads.find((s) => s.owner === me() && s.type === 'hero' && s.count > 0);
       if (!h) return;
       const H = heroesData.heroes.find((x) => x.id === h.hero.arch);
       const sk = H.skills[slot === 'q' ? 0 : 1];
@@ -835,7 +838,7 @@ async function startOnline(lobbyCfg, meta) {
           const target = ent.kind === 'squad'
             ? view.squads.find((s) => s.id === ent.id)
             : view.buildings.find((b) => b.id === ent.id);
-          if (target && teamOf(view, target.owner) !== teamOf(view, 'player') && target.hp > 0) {
+          if (target && teamOf(view, target.owner) !== teamOf(view, me()) && target.hp > 0) {
             doAttack(ent, ent.kind);
             return;
           }
@@ -854,7 +857,7 @@ async function startOnline(lobbyCfg, meta) {
       const y1 = Math.max(dragStart.y, e.clientY);
       const v = new THREE.Vector3();
       sel.squads = view.squads
-        .filter((s) => s.owner === 'player' && s.count > 0)
+        .filter((s) => s.owner === me() && s.count > 0)
         .filter((s) => {
           v.set(s.x, 1, s.z).project(render.camera);
           const sx = (v.x * 0.5 + 0.5) * innerWidth;
@@ -867,7 +870,7 @@ async function startOnline(lobbyCfg, meta) {
       const pt = render.groundPoint(ndcOf(e, render.renderer));
       const ent = render.pick(ndcOf(e, render.renderer));
       if (pendingSkill && ent) {
-        const h = view.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
+        const h = view.squads.find((s) => s.owner === me() && s.type === 'hero' && s.count > 0);
         if (h && throttle()) {
           net.cmd({ cmd: 'cast', slot: pendingSkill, hero: h.id, target: ent.id, kind: ent.kind });
           ordersSent++;
@@ -887,13 +890,13 @@ async function startOnline(lobbyCfg, meta) {
       } else if (ent) {
         if (ent.kind === 'squad') {
           const s = view.squads.find((x) => x.id === ent.id);
-          if (s && s.owner === 'player') {
+          if (s && s.owner === me()) {
             sel.squads = e.shiftKey ? [...new Set([...sel.squads, s.id])] : [s.id];
             sel.building = null;
           }
         } else {
           const b = view.buildings.find((x) => x.id === ent.id);
-          if (b && b.owner === 'player' && b.hp > 0) {
+          if (b && b.owner === me() && b.hp > 0) {
             sel.building = b.id;
             sel.squads = [];
           }
@@ -931,7 +934,7 @@ async function startOnline(lobbyCfg, meta) {
       ordersSent++;
     }
     if (e.code === 'KeyH') {
-      const th = view.buildings.find((b) => b.owner === 'player' && b.type === 'townhall' && b.hp > 0);
+      const th = view.buildings.find((b) => b.owner === me() && b.type === 'townhall' && b.hp > 0);
       if (th) {
         render.controls.target.set(th.x, 0, th.z);
         render.camera.position.set(th.x, 55, th.z + 60);
@@ -975,12 +978,7 @@ async function startOnline(lobbyCfg, meta) {
     onOpen: () => {},
     onJoined: (m) => {
       if (m.races) Object.assign(view.raceOf, m.races);
-      if (m.pid && m.pid !== 'player') {
-        // прототип: браузер играет только слот player (второй человек в 1v1 — headless/PvP на протоколе)
-        ui.overlay.innerHTML = `<div class="card"><h1>Слот занят</h1><p class="dim">Матчмейкер отдал вам pid ${m.pid} — браузерный клиент прототипа играет только за player. Откройте второе окно позже.</p><button onclick="location.reload()">Назад</button></div>`;
-        ui.overlay.classList.remove('hidden');
-        net.close();
-      }
+      if (m.pid) view.me = m.pid; // свой слот (в 1v1 паре может быть 'bot')
     },
     onOpen: () => {},
     onQueue: () => {
@@ -999,7 +997,7 @@ async function startOnline(lobbyCfg, meta) {
       localStorage.setItem('tt_mmr', String(mmr));
       let rewardText = '';
       if (meta) {
-        const heroSq = view.squads.find((s) => s.owner === 'player' && s.type === 'hero');
+        const heroSq = view.squads.find((s) => s.owner === me() && s.type === 'hero');
         const rw = applyBattleResult(meta, { win, xp: heroSq?.hero.xpBattle || 0, goldEarned: 0, maxLevel: heroesData.maxLevel });
         rewardText = `Награды: +${rw.gold}🪙 +${rw.xp} XP${rw.capped ? ' (дейли-кап!)' : ''}`;
         const qdone = settleQuests(meta, questsData, {

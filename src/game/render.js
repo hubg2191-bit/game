@@ -1,7 +1,7 @@
 // client/three — рендер 0.1: земля, здания, отряды (капсулы), флаги, трассеры, кольца выбора.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { WORLD_SCALE, isVisible, teamOf } from './sim.js';
+import { WORLD_SCALE, isVisible, teamOf, sameTeam } from './sim.js';
 
 function canvasTexture(size, draw) {
   const c = document.createElement('canvas');
@@ -97,7 +97,13 @@ export class GameRender {
 
   teamMat(owner) {
     if (owner === 'neutral') return this.teamMats.neutral;
-    return this.teamMats[{ player: 'p0', ally: 'p2', enemy1: 'p1', enemy2: 'p2', enemy3: 'p3', bot: 'p1' }[owner] || 'p1'];
+    const me = this.state.me || 'player';
+    if (owner === me) return this.teamMats.p0;
+    if (sameTeam(this.state, owner, me)) return this.teamMats.p2;
+    const foes = (this.state.pids || []).filter((p) => p !== me && !sameTeam(this.state, p, me));
+    const cols = ['p1', 'p2', 'p3'];
+    const ix = foes.indexOf(owner);
+    return this.teamMats[ix >= 0 ? cols[ix % cols.length] : 'p1'];
   }
 
   buildGround(state) {
@@ -459,7 +465,10 @@ export class GameRender {
     g.visible = isVisible(this.state, s);
     g.rotation.y = s.face || 0;
     if (g.userData.crown) g.userData.crown.rotation.y += 0.03;
-    if (g.userData.aura) g.userData.aura.visible = s.owner === 'player' || teamOf(this.state, s.owner) === 'A';
+    if (g.userData.aura) {
+      const me = this.state.me || 'player';
+      g.userData.aura.visible = s.owner === me || sameTeam(this.state, s.owner, me);
+    }
     // засада: полупрозрачность (материалы клонируем один раз)
     const ghost = (s.invisT || 0) > 0;
     if (ghost !== !!g.userData.ghost) {

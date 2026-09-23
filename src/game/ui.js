@@ -1,6 +1,8 @@
 // client/ui — HUD 0.1: ресурсы, панель выбора, найм, стройка, миникарта, оверлеи.
-import { affordable, recruitTime, buildTime, squadCap, capOf, tradeRate, upgrade, trade, forgeUpgrade, FORGE_COSTS, giveAlly, recruitable, buildMenuFor, MVP_BUILD_MENU, unitById, buildingById, defOf, isVisible, teamOf, WORLD_SCALE } from './sim.js';
+import { affordable, recruitTime, buildTime, squadCap, capOf, tradeRate, upgrade, trade, forgeUpgrade, FORGE_COSTS, giveAlly, recruitable, buildMenuFor, MVP_BUILD_MENU, unitById, buildingById, defOf, isVisible, teamOf, sameTeam, WORLD_SCALE } from './sim.js';
 import { xpNext, pendingPerks } from './meta.js';
+// Свой pid во вьюхе (онлайн): state.me; офлайн — 'player'
+const ME = (s) => s.me || 'player';
 
 function costText(cost) {
   const names = { food: '🍞', wood: '🪵', stone: '🪨', iron: '⛓️', gold: '🪙' };
@@ -251,12 +253,13 @@ export class GameUI {
 
   showEnd(winner, reason, score, stats, squads, extra = {}) {
     const stt = extra.state;
+    const me = ME(stt || {});
     const ffa = stt?.mode === 'ffa';
-    const win = ffa ? winner === 'player' : winner === 'A';
+    const win = ffa ? winner === me : winner === 'A';
     const st = { kills: 0, losses: 0 };
     const foe = { kills: 0, losses: 0 };
     for (const [pid, s] of Object.entries(stats)) {
-      const mine = ffa ? pid === 'player' : teamOf(stt, pid) === winner;
+      const mine = ffa ? pid === me : teamOf(stt, pid) === winner;
       const dst = mine ? st : foe;
       dst.kills += s.kills;
       dst.losses += s.losses;
@@ -266,7 +269,7 @@ export class GameUI {
       .sort((a, b) => (b.kills || 0) - (a.kills || 0))[0];
     const mvpName = mvp ? (extra.unitName ? extra.unitName(mvp.type, mvp.owner) : mvp.type) : '';
     const scoreLine = ffa
-      ? `Счёт ${Math.floor(score.player)} (топ врага ${Math.max(...stt.pids.filter((p) => p !== 'player').map((p) => Math.floor(score[p] || 0)))})`
+      ? `Счёт ${Math.floor(score[me] || 0)} (топ врага ${Math.max(...stt.pids.filter((p) => p !== me).map((p) => Math.floor(score[p] || 0)))})`
       : `Счёт ${Math.floor(score.A)} : ${Math.floor(score.B)}`;
     this.overlay.innerHTML = `
       <div class="card">
@@ -288,25 +291,26 @@ export class GameUI {
   }
 
   update(state, sel, apm = null) {
-    const p = state.players.player;
+    const me = ME(state);
+    const p = state.players[me] || state.players.player;
     const r = p.res;
     const prod = p._prod || {};
     const hunger = p.starving ? ' <b class="hunger">⚠️ ГОЛОД</b>' : '';
     this.top.innerHTML = `
-      <span title="Еда (кап склада)">🍞 ${Math.floor(r.food)}/${capOf(state, 'player', 'food')} <i>${prod.food ? '+' + prod.food.toFixed(1) : ''}</i></span>
-      <span title="Дерево">🪵 ${Math.floor(r.wood)}/${capOf(state, 'player', 'wood')} <i>${prod.wood ? '+' + prod.wood.toFixed(1) : ''}</i></span>
+      <span title="Еда (кап склада)">🍞 ${Math.floor(r.food)}/${capOf(state, me, 'food')} <i>${prod.food ? '+' + prod.food.toFixed(1) : ''}</i></span>
+      <span title="Дерево">🪵 ${Math.floor(r.wood)}/${capOf(state, me, 'wood')} <i>${prod.wood ? '+' + prod.wood.toFixed(1) : ''}</i></span>
       <span title="Камень">🪨 ${Math.floor(r.stone)}</span>
       <span title="Железо">⛓️ ${Math.floor(r.iron)}</span>
       <span title="Золото">🪙 ${Math.floor(r.gold)}</span>
       <span title="Население">👥 ${r.popUsed}/${r.popMax}</span>
-      <span title="Лимит отрядов (герой не в счёт)">⚔️ ${state.squads.filter((s) => s.owner === 'player' && s.type !== 'hero').length}/${squadCap(state, 'player')}</span>${hunger}${apm != null ? `<span title="Приказов/сек (лимит 10)">⚡${apm}</span>` : ''}`;
+      <span title="Лимит отрядов (герой не в счёт)">⚔️ ${state.squads.filter((s) => s.owner === me && s.type !== 'hero').length}/${squadCap(state, me)}</span>${hunger}${apm != null ? `<span title="Приказов/сек (лимит 10)">⚡${apm}</span>` : ''}`;
     // полоса счёта по hud-battle.md: флаги, доход, прогноз
     const win = state.map.winScore || 1000;
     if (state.mode === 'ffa') {
-      const foes = state.pids.filter((p) => p !== 'player');
+      const foes = state.pids.filter((p) => p !== me);
       const top = Math.max(...foes.map((p) => Math.floor(state.score[p] || 0)));
       this.score.innerHTML = `
-        <b class="me">${Math.floor(state.score.player)}</b>
+        <b class="me">${Math.floor(state.score[me] || 0)}</b>
         <span>${fmtTime(state.t)} • до ${win} • топ врага ${top}</span>
         <b class="en">${top}</b>`;
     } else {
@@ -334,10 +338,11 @@ export class GameUI {
   }
 
   renderPanel(state, sel) {
-    const r = state.players.player.res;
+    const me = ME(state);
+    const r = (state.players[me] || state.players.player).res;
     if (sel.building) {
       const b = state.buildings.find((x) => x.id === sel.building);
-      if (!b || b.hp <= 0 || b.owner !== 'player') {
+      if (!b || b.hp <= 0 || b.owner !== me) {
         this.panel.classList.add('hidden');
         return;
       }
@@ -356,14 +361,14 @@ export class GameUI {
         html += `<button data-up ${ok ? '' : 'disabled'}>Улучшить до ур.${b.level + 1} ${costText(cost)}</button>`;
       }
       if (b.type === 'market' && b.buildT <= 0) {
-        const rate = Math.round(tradeRate(state, 'player'));
+        const rate = Math.round(tradeRate(state, me));
         html += `<button data-trade ${r.wood >= 100 ? '' : 'disabled'}>Обменять 100🪵 → ${rate}🪙</button>`;
-        if (state.pids.some((q) => q !== 'player' && teamOf(state, q) === teamOf(state, 'player'))) {
+        if (state.pids.some((q) => q !== me && teamOf(state, q) === teamOf(state, me))) {
           html += `<button data-give ${r.wood >= 200 ? '' : 'disabled'}>Отдать союзнику 200🪵</button>`;
         }
       }
       if (b.type === 'forge' && b.buildT <= 0) {
-        const lv = state.upgrades.player?.forge || 0;
+        const lv = (state.upgrades[ME(state)] || {}).forge || 0;
         const names = ['', '+10% HP пехоты', '+10% урон пехоты', '+10% броня vs стрелы'];
         html += `<div>Улучшения кузницы: ур.${lv}/3</div>`;
         if (lv < 3) {
@@ -371,12 +376,12 @@ export class GameUI {
           html += `<button data-forge ${affordable(r, cost) ? '' : 'disabled'}>${names[lv + 1]} ${costText(cost)}</button>`;
         }
       }
-      for (const uid of recruitable(state, 'player', b.type)) {
+      for (const uid of recruitable(state, me, b.type)) {
         const u = unitById(state.units, uid);
         const ok = affordable(r, u.cost);
         html += `<button data-rec="${uid}" ${ok ? '' : 'disabled'}>${u.name} (${u.size} 👥) ${costText(u.cost)} • ${Math.ceil(recruitTime(u))}с</button>`;
       }
-      if (recruitable(state, 'player', b.type).length) html += `<div class="dim">Точка сбора — рядом со зданием</div>`;
+      if (recruitable(state, me, b.type).length) html += `<div class="dim">Точка сбора — рядом со зданием</div>`;
       this.panel.innerHTML = html;
       this.panel.classList.remove('hidden');
       this.panel.querySelectorAll('[data-rec]').forEach((btn) => {
@@ -424,10 +429,11 @@ export class GameUI {
   }
 
   renderBuildMenu(state) {
-    const r = state.players.player.res;
+    const me = ME(state);
+    const r = (state.players[me] || state.players.player).res;
     this.buildmenu.innerHTML =
       `<span class="btitle">Построить:</span>` +
-      buildMenuFor(state, 'player').map((id) => {
+      buildMenuFor(state, me).map((id) => {
         const def = buildingById(state.bdefs, id);
         const ok = affordable(r, def.cost || (id === 'wall' ? { stone: 120 } : {}));
         const active = this.buildMode === id ? ' class="active"' : '';
@@ -446,9 +452,9 @@ export class GameUI {
       el.id = 'heropanel';
       this.root.appendChild(el);
     }
-    const h = state.squads.find((s) => s.owner === 'player' && s.type === 'hero');
+    const h = state.squads.find((s) => s.owner === ME(state) && s.type === 'hero');
     if (!h) {
-      const rp = (state.respawns || []).find((r) => r.pid === 'player');
+      const rp = (state.respawns || []).find((r) => r.pid === ME(state));
       el.innerHTML = rp ? `<div class="hname">Герой возродится через ${Math.ceil(rp.t)}с</div>` : '';
       el.style.display = rp ? 'block' : 'none';
       return;
@@ -503,12 +509,12 @@ export class GameUI {
       g.restore();
     }
     const dotColor = (owner) => {
-      if (owner === 'player') return '#2f9dff';
-      if (owner === 'ally') return '#9fd0ff';
-      if (owner === 'enemy1') return '#ff4d4d';
-      if (owner === 'enemy2') return '#ffd23f';
-      if (owner === 'enemy3') return '#b07dff';
-      return '#888';
+      if (owner === ME(state)) return '#2f9dff';
+      if (sameTeam(state, owner, ME(state))) return '#9fd0ff';
+      const foes = state.pids.filter((p) => p !== ME(state) && !sameTeam(state, p, ME(state)));
+      const cols = ['#ff4d4d', '#ffd23f', '#b07dff'];
+      const ix = foes.indexOf(owner);
+      return ix >= 0 ? cols[ix % cols.length] : '#888';
     };
     for (const b of state.buildings) {
       if (b.hp <= 0) continue;
