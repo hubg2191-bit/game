@@ -29,9 +29,7 @@ function client(race) {
       if (m.snap !== undefined || m.full) {
         st.snaps += 1;
         st.lastSnapAt = Date.now();
-        if (m.full) {
-          for (const s of m.squads || []) if (s.o === st.pid) st.sq.push(s.id);
-        }
+        if (m.full) st.fullSq = m.squads || [];
       }
       if (m.ack) st.acks += 1;
       if (m.err) st.errs.push(m.err);
@@ -65,7 +63,7 @@ while (Date.now() - t0 < SECS * 1000) {
   if (el - lastOrder >= 5) {
     lastOrder = el;
     for (const [c, tag] of [[A, 'A'], [B, 'B']]) {
-      const ids = c.st.sq.slice(0, 2);
+      const ids = (c.st.fullSq || []).filter((s) => s.o === c.st.pid).map((s) => s.id).slice(0, 2);
       if (ids.length && c.st.joined) {
         c.ws.send(JSON.stringify({ room: c.st.joined.room, clientId: c.st.cid, cmd: 'move', ids, x: 150 + (el % 50), z: 150, t: el, seq: ++seq }));
       }
