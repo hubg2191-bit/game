@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'server/**'
+      - '.github/workflows/server.yml'
 
 permissions:
   contents: read
