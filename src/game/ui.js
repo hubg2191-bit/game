@@ -117,7 +117,10 @@ export class GameUI {
         body = `
           <div class="lrow"><span>Клан:</span><input id="clanName" value="${meta.clan.name || ''}" placeholder="Название клана" maxlength="24"/></div>
           <p>Казна клана: <b>${Math.floor(meta.clan.vault)}🪙</b> <span class="dim">(10% с наград боёв)</span></p>
-          <p>Очки сезона: <b>${meta.clan.points || 0}</b> <span class="dim">(победа 100 / поражение 30)</span></p>
+          <p>Очки сезона: <b>${meta.clan.points || 0}</b> <span class="dim">(победа 100 / поражение 30, выходные x2)</span></p>
+          ${meta.war && Date.now() < meta.war.endsAt
+            ? `<p>⚔️ Война с ${meta.war.enemy}: ${meta.war.wins}:${meta.war.losses} (боёв ${meta.war.battles}, до 3 побед)</p>`
+            : '<button id="mWar">Объявить войну (2v2, 7 дней)</button>'}
           <button id="mVault">Забрать в казну столицы</button>
           <p class="dim">Союзники-боты в 2v2 — члены вашего клана.</p>`;
       } else {
@@ -175,6 +178,8 @@ export class GameUI {
       if (mw) mw.onclick = () => { cb.onWorld(); };
       const wv = this.overlay.querySelector('#mVault');
       if (wv) wv.onclick = () => { cb.onVault(); draw(); };
+      const mwr = this.overlay.querySelector('#mWar');
+      if (mwr) mwr.onclick = () => { cb.onWar(); draw(); };
       const wp = this.overlay.querySelector('#mWipe');
       if (wp) wp.onclick = () => { if (confirm('Вайпнуть сезон? Столица ужмётся.')) { cb.onWipe(); draw(); } };
       const vc = this.overlay.querySelector('#mVac');

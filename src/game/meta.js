@@ -264,7 +264,7 @@ export function applyBattleResult(m, { win, xp, goldEarned, maxLevel = 15 }) {
   const vaultCut = Math.floor(rw.gold * 0.1); // налог клана 10%
   m.capital.gold += rw.gold - vaultCut + goldEarned;
   m.clan.vault += vaultCut;
-  m.clan.points = (m.clan.points || 0) + (win ? 100 : 30); // очки сезона (season-structure)
+  m.clan.points = (m.clan.points || 0) + (win ? 100 : 30) * weekendMult(); // очки сезона (season-structure)
   if (win) m.stats.wins = (m.stats.wins || 0) + 1;
   // опыт герою
   const h = m.hero;
@@ -306,6 +306,46 @@ export function grantMissionReward(m, reward, maxLevel = 30) {
   }
   saveMeta(m);
   return out.join(' ');
+}
+// Войны кланов (season-structure): вызов на 7 дней, 2v2-бои идут в зачёт, до 3 побед.
+// Турниры выходного дня: по сб/св очки клана x2.
+const WAR_NAMES = ['Железные Волки', 'Красные Топоры', 'Серые Совы', 'Медные Быки', 'Ночные Ястребы'];
+export function declareWar(m) {
+  if (m.war && Date.now() < m.war.endsAt) return null;
+  const pool = WAR_NAMES.filter((n) => n !== m.clan.name);
+  m.war = {
+    enemy: pool[Math.floor(Math.random() * pool.length)],
+    wins: 0, losses: 0, battles: 0,
+    endsAt: Date.now() + 7 * 86400000,
+  };
+  saveMeta(m);
+  return m.war;
+}
+export function weekendMult() {
+  const d = new Date().getDay();
+  return d === 0 || d === 6 ? 2 : 1;
+}
+export function settleWarBattle(m, win, mode) {
+  if (!m.war || Date.now() > m.war.endsAt || mode !== '2v2') return null;
+  m.war.battles += 1;
+  if (win) m.war.wins += 1;
+  else m.war.losses += 1;
+  let text = `Война с ${m.war.enemy}: ${m.war.wins}:${m.war.losses}`;
+  if (m.war.wins >= 3 || m.war.losses >= 3 || m.war.battles >= 5) {
+    const victory = m.war.wins > m.war.losses;
+    if (victory) {
+      m.capital.gold += 300;
+      m.clan.points = (m.clan.points || 0) + 500;
+      m.hero.inventory.push(rollGear(Math.random, 'purple'));
+      text += ' — ПОБЕДА! +300🪙 +500 очк. +фиолет';
+    } else {
+      m.capital.gold += 100;
+      text += ' — поражение. +100🪙';
+    }
+    m.war = null;
+  }
+  saveMeta(m);
+  return text;
 }
 // Автосезон: день >90 — вайп сам (1.0)
 export function autoSeason(m) {

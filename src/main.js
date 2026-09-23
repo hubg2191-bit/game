@@ -11,7 +11,7 @@ import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
 import {
   loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear,
-  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext, TRACK, claimTrack, checkComeback, SEASON_SHOP, buyShop,
+  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext, TRACK, claimTrack, checkComeback, SEASON_SHOP, buyShop, declareWar, settleWarBattle,
 } from './game/meta.js';
 import { MISSIONS, setupMission, missionProgress, missionDone } from './game/missions.js';
 import unitsData from './game/data/units.json';
@@ -494,6 +494,8 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       });
       if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
       if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
+      const warText = settleWarBattle(meta, win, state.mode);
+      if (warText) rewardText += ' • ' + warText;
     }
     try {
       localStorage.setItem('tt_last_replay', JSON.stringify(rec));
@@ -1037,6 +1039,8 @@ async function startOnline(lobbyCfg, meta) {
         });
         if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
         if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
+        const warText = settleWarBattle(meta, win, view.mode);
+        if (warText) rewardText += ' • ' + warText;
       }
       ui.showEnd(m.winner, m.reason, m.score, m.stats, view.squads, {
         state: view, unitName, mmr, rewardText, replayLabel: 'Скачать реплей',
@@ -1332,6 +1336,7 @@ bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK
     meta.clan.vault = 0;
     saveMeta(meta);
   },
+  onWar: () => { declareWar(meta); },
   onClanName: (name) => { meta.clan.name = name.slice(0, 24); saveMeta(meta); },
   onWipe: () => wipeSeason(meta),
   onPlay: () => openLobby(),
