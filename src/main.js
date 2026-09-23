@@ -11,7 +11,7 @@ import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
 import {
   loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear,
-  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext,
+  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext, TRACK, claimTrack, checkComeback,
 } from './game/meta.js';
 import { MISSIONS, setupMission, missionProgress, missionDone } from './game/missions.js';
 import unitsData from './game/data/units.json';
@@ -57,7 +57,8 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   const cfg = {
     mode: map.mode,
     races: { player: lobbyCfg.race },
-    difficulty: mission ? (mission.vsEasy ? 'easy' : 'passive') : lobbyCfg.difficulty,
+    difficulty: mission ? (mission.vsEasy ? 'easy' : 'passive')
+      : (meta?.shield?.active ? 'easy' : lobbyCfg.difficulty), // щит новичка: только легкие боты
     seed: replayRec ? replayRec.seed : Math.floor(Math.random() * 1e9),
     heroesData,
     hero: replayRec?.hero || {
@@ -462,6 +463,9 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       const xp = heroSq?.hero.xpBattle || 0;
       const rw = applyBattleResult(meta, { win, xp, goldEarned: 0, maxLevel: heroesData.maxLevel });
       rewardText = `Награды: +${rw.gold}🪙 +${rw.xp + xp} XP${rw.capped ? ' (дейли-кап!)' : ''}`;
+      meta.stats.maxSquads = Math.max(meta.stats.maxSquads || 0, state.squads.filter((s) => s.owner === 'player').length);
+      meta.stats.flagsCapped = (meta.stats.flagsCapped || 0) + state.flags.filter((f) => f.owner && teamOf(state, f.owner) === teamOf(state, 'player')).length;
+      saveMeta(meta);
       if (mission?.id === 'm5' && win) {
         rewardText += ' • Миссия: ' + grantMissionReward(meta, mission.reward, heroesData.maxLevel);
       }
@@ -548,6 +552,12 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
     apmTick();
     ui.update(state, sel, apmCount);
     ui.heroPanel(state, heroesData);
+    // щит новичка слетает при атаке центра (золотая провинция)
+    if (meta?.shield?.active && state.flags.some((f) => f.type === 'gold' && f.owner && teamOf(state, f.owner) === teamOf(state, 'player'))) {
+      meta.shield.active = false;
+      saveMeta(meta);
+      state.events.push({ t: state.t, text: 'Щит новичка слетел: атака центра!', kind: 'combat' });
+    }
     if (mission && mission.id !== 'm5' && started && !state.over) {
       const prog = missionProgress(state, mission.id);
       ui.objectives(prog);
@@ -1001,6 +1011,9 @@ async function startOnline(lobbyCfg, meta) {
         const heroSq = view.squads.find((s) => s.owner === me() && s.type === 'hero');
         const rw = applyBattleResult(meta, { win, xp: heroSq?.hero.xpBattle || 0, goldEarned: 0, maxLevel: heroesData.maxLevel });
         rewardText = `Награды: +${rw.gold}🪙 +${rw.xp} XP${rw.capped ? ' (дейли-кап!)' : ''}`;
+        meta.stats.maxSquads = Math.max(meta.stats.maxSquads || 0, view.squads.filter((s) => s.owner === me()).length);
+        meta.stats.flagsCapped = (meta.stats.flagsCapped || 0) + view.flags.filter((f) => f.owner && teamOf(view, f.owner) === teamOf(view, me())).length;
+        saveMeta(meta);
         const qdone = settleQuests(meta, questsData, {
           wood: view.quest.wood, food: view.quest.food, neutrals: view.quest.neutrals,
           flagSec: view.quest.flagSec, battles: 1, orders: ordersSent,
@@ -1047,6 +1060,7 @@ async function startOnline(lobbyCfg, meta) {
   }
   net.hello({
     simVersion: 12, mode: map.mode, map: lobbyCfg.map, race: lobbyCfg.race,
+    difficulty: meta?.shield?.active ? 'easy' : lobbyCfg.difficulty,
     hero: { arch: meta?.hero.arch || 'warlord', level: meta?.hero.level || 1, gear: meta?.hero.gear || {}, perks: meta?.hero.perks || [] },
     mmr,
   });
@@ -1077,6 +1091,7 @@ if (offline.gold > 0) {
   meta.capital.gold += offline.gold;
   saveMeta(meta);
 }
+const comeback = checkComeback(meta);
 // --- наблюдатель: read-only вьюха из снапшотов с задержкой 30с ---
 async function startObserve(roomId) {
   sceneEl.innerHTML = '';
@@ -1204,10 +1219,13 @@ function openLobby() {
     (cfg) => startMatch(cfg, null, meta)
   );
 }
-bootUI.showMeta(meta, { heroesData, racesData, questsData, offline }, {
+bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK, comeback }, {
   onArch: (arch) => { meta.hero.arch = arch; saveMeta(meta); },
   onPerk: (id) => { meta.hero.perks.push(id); saveMeta(meta); },
   onCraft: (itemId) => { craftPurple(meta, itemId); },
+  onTrack: (id) => { claimTrack(meta, id, heroesData.maxLevel); },
+  onVacation: () => { meta.vacationUntil = Date.now() + 7 * 86400000; saveMeta(meta); },
+  onVacationEnd: () => { meta.vacationUntil = 0; saveMeta(meta); },
   onEquip: (id) => {
     const ix = (meta.hero.inventory || []).findIndex((it) => it.id === id);
     if (ix < 0) return;

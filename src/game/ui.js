@@ -53,6 +53,8 @@ export class GameUI {
         const cost = [0, 500, 1500][meta.capital.thLevel] || 0;
         body = `
           <p>Ратуша ур.${meta.capital.thLevel} • Казна: <b>${Math.floor(meta.capital.gold)}🪙</b></p>
+          ${ctx.comeback ? '<p class="good">⚔️ С возвращением! Реванш 3 дня: +50% XP/золота.</p>' : ''}
+          ${ctx.offline && ctx.offline.vacation ? '<p class="dim">Отпуск: дохода нет.</p>' : ''}
           ${ctx.offline && ctx.offline.gold > 0 ? `<p class="good">Пока вас не было (${Math.floor(ctx.offline.secs / 60)} мин): +${ctx.offline.gold}🪙 (40%, кап 8ч)</p>` : ''}
           <p class="dim">Уровень столицы: +100🪙 и +50🍞 к старту схватки за уровень.</p>
           ${meta.capital.thLevel < 3
@@ -104,8 +106,21 @@ export class GameUI {
           <button id="mVault">Забрать в казну столицы</button>
           <p class="dim">Союзники-боты в 2v2 — члены вашего клана.</p>`;
       } else {
+        const shieldOn = meta.shield?.active && meta.shield.until > Date.now();
+        const vacOn = meta.vacationUntil && Date.now() < meta.vacationUntil;
+        const buffOn = meta.buffUntil && Date.now() < meta.buffUntil;
         body = `
           <p>День сезона: <b>${meta.season.day}/90</b> • Боёв сегодня: ${meta.season.battlesToday}/3 (дальше награды 20%)</p>
+          <p>${shieldOn ? `🛡️ Щит новичка до ${new Date(meta.shield.until).toLocaleDateString()}` : 'Щита нет'}</p>
+          ${buffOn ? '<p class="good">⚔️ Реванш: +50% XP/золота</p>' : ''}
+          ${vacOn ? `<p>🏖️ Отпуск до ${new Date(meta.vacationUntil).toLocaleDateString()} (дохода нет)</p><button id="mVacEnd">Вернуться досрочно</button>`
+            : '<button id="mVac">Отпуск 7 дней (заморозка)</button>'}
+          <p>7-дневка новичка:</p>
+          ${(ctx.track || []).map((t) => {
+            const done = (meta.track.done || []).includes(t.id);
+            const can = !done && t.check(meta);
+            return `<div class="lrow"><span>${done ? '☑' : can ? '✅' : '☐'}</span><i>${t.name}</i>${!done && can ? `<button data-track="${t.id}">Забрать</button>` : ''}</div>`;
+          }).join('')}
           <p class="dim">Вайп: столица жмётся до ур.1, герои/шмот/золото/MMR остаются.</p>
           <button id="mWipe">Ручной вайп сезона</button>`;
       }
@@ -143,6 +158,13 @@ export class GameUI {
       if (wv) wv.onclick = () => { cb.onVault(); draw(); };
       const wp = this.overlay.querySelector('#mWipe');
       if (wp) wp.onclick = () => { if (confirm('Вайпнуть сезон? Столица ужмётся.')) { cb.onWipe(); draw(); } };
+      const vc = this.overlay.querySelector('#mVac');
+      if (vc) vc.onclick = () => { cb.onVacation(); draw(); };
+      const ve = this.overlay.querySelector('#mVacEnd');
+      if (ve) ve.onclick = () => { cb.onVacationEnd(); draw(); };
+      this.overlay.querySelectorAll('[data-track]').forEach((b) => {
+        b.onclick = () => { cb.onTrack(b.dataset.track); draw(); };
+      });
       const cn = this.overlay.querySelector('#clanName');
       if (cn) cn.onchange = () => cb.onClanName(cn.value);
       this.overlay.querySelector('#mPlay').onclick = () => {

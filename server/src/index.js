@@ -48,7 +48,7 @@ function tryMatch() {
       startRoom('1v1', a.map, [
         { client: a, pid: 'player' },
         { client: b, pid: 'bot' },
-      ]);
+      ], a.difficulty);
       return;
     }
   }
@@ -59,21 +59,21 @@ function tryMatch() {
     if (now - q.since > waitMs) {
       queue.splice(i, 1);
       if (q.mode === '2v2') {
-        startRoom('2v2', q.map, [{ client: q, pid: 'player' }]);
+        startRoom('2v2', q.map, [{ client: q, pid: 'player' }], q.difficulty);
       } else if (q.mode === 'ffa') {
-        startRoom('ffa', q.map, [{ client: q, pid: 'player' }]);
+        startRoom('ffa', q.map, [{ client: q, pid: 'player' }], q.difficulty);
       } else {
-        startRoom('1v1', q.map, [{ client: q, pid: 'player' }]);
+        startRoom('1v1', q.map, [{ client: q, pid: 'player' }], q.difficulty);
       }
     }
   }
 }
 setInterval(tryMatch, 1000);
 
-function startRoom(mode, mapId, slots) {
+function startRoom(mode, mapId, slots, difficulty) {
   const seed = Math.floor(Math.random() * 1e9);
   const room = new BattleRoom({
-    mode, mapId, seed, heroes: data.heroes, store, log,
+    mode, mapId, seed, heroes: data.heroes, store, log, difficulty,
     onClose: (id) => rooms.delete(id),
   });
   rooms.set(room.id, room);
@@ -170,6 +170,7 @@ function handle(ws, clientId, msg) {
       race: msg.race || 'nord',
       hero: msg.hero || null,
       mmr: msg.mmr || 1000,
+      difficulty: ['easy', 'normal', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'normal',
       since: Date.now(),
     });
     send(ws, { queued: true, clientId });

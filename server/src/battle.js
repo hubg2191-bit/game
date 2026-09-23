@@ -8,10 +8,11 @@ import { makeLimiter, validateCmd, applyCmd } from './validate.js';
 let roomSeq = 1;
 
 export class BattleRoom {
-  constructor({ mode, mapId, seed, heroes, store, onClose, log }) {
+  constructor({ mode, mapId, seed, heroes, store, onClose, log, difficulty }) {
     this.id = `battle-${roomSeq++}`;
     this.mode = mode; // 1v1 | 2v2 | ffa
     this.mapId = mapId;
+    this.difficulty = difficulty || 'normal';
     this.map = data.maps[mapId] || data.maps.plain;
     this.seed = seed ?? Math.floor(Math.random() * 1e9);
     this.heroes = heroes; // heroes.json для симов
@@ -65,6 +66,7 @@ export class BattleRoom {
     this.state = sim.createGame(this.map, data.units, data.bdefs, data.units.rules, data.races, {
       mode: this.mode,
       races,
+      difficulty: this.difficulty,
       difficulty: 'normal',
       seed: this.seed,
       heroesData: this.heroes,
