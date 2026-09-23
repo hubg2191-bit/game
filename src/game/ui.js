@@ -417,7 +417,7 @@ export class GameUI {
       <span title="Железо">⛓️ ${Math.floor(r.iron)}</span>
       <span title="Золото">🪙 ${Math.floor(r.gold)}</span>
       <span title="Население">👥 ${r.popUsed}/${r.popMax}</span>
-      <span title="Лимит отрядов (герой не в счёт)">⚔️ ${state.squads.filter((s) => s.owner === me && s.type !== 'hero').length}/${squadCap(state, me)}</span>${hunger}${apm != null ? `<span title="Приказов/сек (лимит 10)">⚡${apm}</span>` : ''}`;
+      <span title="Лимит отрядов (герой не в счёт)">⚔️ ${state.squads.filter((s) => s.owner === me && s.type !== 'hero').length}/${squadCap(state, me)}</span>${hunger}${apm != null ? `<span title="Приказов/сек (лимит 10)">⚡${apm}</span>` : ''}<span class="dim" title="Визуал 2.5D (орто)">2.5D</span>`;
     // полоса счёта по hud-battle.md: флаги, доход, прогноз
     const win = state.map.winScore || 1000;
     if (state.mode === 'ffa') {
