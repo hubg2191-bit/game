@@ -38,8 +38,10 @@ export function loadMeta() {
       m.season.battlesToday = 0;
     }
     if (!m.quests || m.quests.date !== today) {
-      m.quests = { date: today, prog: {}, done: [] };
+      m.quests = { date: today, prog: {}, done: [], active: ['lumber', 'bread', 'patrol'] };
     }
+    if (!m.quests.active) m.quests.active = ['lumber', 'bread', 'patrol'];
+    if (!m.weekly) m.weekly = { week: '', prog: {}, done: [], wins: 0 };
     return m;
   } catch {
     return defaultMeta();
@@ -163,42 +165,87 @@ export function pendingPerks(m, heroesData) {
   return rows.filter((row) => row.level <= m.hero.level
     && !row.options.some((o) => (m.hero.perks || []).includes(o.id)));
 }
-// Квесты таверны: прогресс за матч + выдача наград
+// Квесты таверны: прогресс за матч + выдача наград.
+// match: {wood, food, neutrals, flagSec, flag3Sec, battles, orders, heroKills, built, marks,
+//          unbrHold, ambushCaps, auraBuilds, convoyHeal, towers, heroArch, wins, afk}
+// Афк-фарм режется: при afk (бой <5 мин или APM<5) прогресса нет.
 export function settleQuests(m, questsData, match) {
-  // match: {wood, food, neutrals, flagSec, battles, orders, heroKills, built, marks, heroArch, wins}
+  if (match.afk) return [];
   const today = new Date().toISOString().slice(0, 10);
-  if (m.quests.date !== today) m.quests = { date: today, prog: {}, done: [] };
+  if (m.quests.date !== today) m.quests = { date: today, prog: {}, done: [], active: ['lumber', 'bread', 'patrol'] };
+  if (!m.quests.active || !m.quests.active.length) m.quests.active = ['lumber', 'bread', 'patrol'];
+  // недельное окно (понедельник)
+  const d = new Date();
+  const monday = new Date(d.setDate(d.getDate() - ((d.getDay() + 6) % 7))).toISOString().slice(0, 10);
+  if (!m.weekly || m.weekly.week !== monday) m.weekly = { week: monday, prog: {}, done: [], wins: 0 };
   const done = [];
-  const prog = m.quests.prog;
-  const add = (qid, cur, need, gold, xp) => {
-    if (m.quests.done.includes(qid)) return;
-    prog[qid] = Math.min(need, (prog[qid] || 0) + cur);
-    if (prog[qid] >= need) {
-      m.quests.done.push(qid);
-      m.capital.gold += gold;
-      const h = m.hero;
-      h.xp += xp;
-      while (h.level < 30 && h.xp >= xpNext(h.level)) {
-        h.xp -= xpNext(h.level);
-        h.level += 1;
-      }
+  const grant = (gold, xp) => {
+    m.capital.gold += gold;
+    const h = m.hero;
+    h.xp += xp;
+    while (h.level < 30 && h.xp >= xpNext(h.level)) {
+      h.xp -= xpNext(h.level);
+      h.level += 1;
+    }
+  };
+  const progKey = (store, qid, cur, need, gold, xp) => {
+    if (store.done.includes(qid)) return;
+    store.prog[qid] = Math.min(need, (store.prog[qid] || 0) + cur);
+    if (store.prog[qid] >= need) {
+      store.done.push(qid);
+      grant(gold, xp);
       done.push(`Квест выполнен: +${gold}🪙 +${xp} XP`);
     }
   };
+  // дейлики: только выбранные 3 из 5
   for (const q of questsData.dailies || []) {
-    if (q.res === 'wood') add(q.id, match.wood, q.need, q.gold, q.xp);
-    else if (q.res === 'food') add(q.id, match.food, q.need, q.gold, q.xp);
-    else if (q.res === 'neutrals_killed') add(q.id, match.neutrals, q.need, q.gold, q.xp);
-    else if (q.needSec) add(q.id, match.flagSec, q.needSec, q.gold, q.xp);
+    if (!m.quests.active.includes(q.id)) continue;
+    if (q.res === 'wood') progKey(m.quests, q.id, match.wood, q.need, q.gold, q.xp);
+    else if (q.res === 'food') progKey(m.quests, q.id, match.food, q.need, q.gold, q.xp);
+    else if (q.res === 'neutrals_killed') progKey(m.quests, q.id, match.neutrals, q.need, q.gold, q.xp);
+    else if (q.needSec) progKey(m.quests, q.id, match.flagSec, q.needSec, q.gold, q.xp);
     else if (q.id === 'skirmish2' && match.orders >= (q.minOrders || 50)) {
-      add(q.id, 1, q.need, q.gold, q.xp);
+      progKey(m.quests, q.id, 1, q.need, q.gold, q.xp);
     }
   }
+  // викли
+  if (match.wins) m.weekly.wins += 1;
+  progKey(m.weekly, 'conqueror', match.flag3Sec, 600, 400, 600);
+  if (m.weekly.wins >= 3 && !m.weekly.done.includes('duelist')) {
+    m.weekly.done.push('duelist');
+    grant(400, 600);
+    done.push('Дуэлянт: +400🪙 +600 XP');
+  }
+  // клановые (лайфтайм): казна — дерево, крепость — башни, кровь — фраги
+  m.stats.wood = (m.stats.wood || 0) + match.wood;
+  m.stats.towers = (m.stats.towers || 0) + (match.towers || 0);
+  const cprog = m.clan.qprog || (m.clan.qprog = {});
+  const cdone = m.clan.qdone || (m.clan.qdone = []);
+  for (const q of questsData.clanQuests || []) {
+    if (cdone.includes(q.id)) continue;
+    const cur = q.res === 'woodTotal' ? m.stats.wood : q.res === 'towersTotal' ? m.stats.towers : m.stats.kills;
+    cprog[q.id] = Math.min(q.need, cur);
+    if (cur >= q.need) {
+      cdone.push(q.id);
+      m.clan.points = (m.clan.points || 0) + q.points;
+      done.push(`${q.name}: +${q.points} очков клана`);
+    }
+  }
+  // геройские (6 механик)
+  const hmap = {
+    kill30: match.heroKills, unbr_hold: match.unbrHold, ambush_cap: match.ambushCaps,
+    marks5: match.marks, aura_build: match.auraBuilds, convoy_heal: match.convoyHeal,
+  };
   for (const q of questsData.heroQuests || []) {
     if (match.heroArch !== q.hero) continue;
-    if (q.id === 'kill30') add(`hq_${q.id}`, match.heroKills, q.need, q.gold, q.xp);
-    else if (q.id === 'build3') add(`hq_${q.id}`, match.built, q.need, q.gold, q.xp);
-    else if (q.id === 'marks5') add(`hq_${q.id}`, match.marks, q.need, q.gold, q.xp);
+    const key = `hq_${q.id}`;
+    if (m.quests.done.includes(key)) continue;
+    m.quests.prog[key] = Math.min(q.need, (m.quests.prog[key] || 0) + (hmap[q.id] || 0));
+    if (m.quests.prog[key] >= q.need) {
+      m.quests.done.push(key);
+      grant(q.gold, q.xp);
+      done.push(`Квест героя: +${q.gold}🪙 +${q.xp} XP`);
+    }
   }
   m.stats.kills += match.heroKills;
   m.stats.built += match.built;

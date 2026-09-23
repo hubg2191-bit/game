@@ -81,6 +81,7 @@ export class GameUI {
         const qd = ctx.questsData;
         const prog = meta.quests.prog || {};
         const done = meta.quests.done || [];
+        const active = meta.quests.active || [];
         const qtext = (q) => {
           if (q.res === 'wood') return `Добыть дерева: ${Math.floor(prog[q.id] || 0)}/${q.need}`;
           if (q.res === 'food') return `Добыть еды: ${Math.floor(prog[q.id] || 0)}/${q.need}`;
@@ -91,11 +92,24 @@ export class GameUI {
         };
         const hqtext = (q) => {
           const cur = prog[`hq_${q.id}`] || 0;
-          return `${q.hero === meta.hero.arch ? '' : '(чужой герой) '}${q.id === 'kill30' ? `Фраги героем: ${cur}/${q.need}` : q.id === 'build3' ? `Построек: ${cur}/${q.need}` : `Меток: ${cur}/${q.need}`}`;
+          const what = { kill30: 'Фраги героем', unbr_hold: 'Точек под Несгибаемыми', ambush_cap: 'Флагов засадой', marks5: 'Меток', aura_build: 'Зданий под аурой', convoy_heal: 'Хила обозом' }[q.id] || q.id;
+          return `${q.hero === meta.hero.arch ? '' : '(чужой герой) '}${what}: ${cur}/${q.need}`;
         };
         body = `
-          <p>Дейлики (сброс в полночь):</p>
-          ${(qd.dailies || []).map((q) => `<div class="lrow"><span>${done.includes(q.id) ? '☑' : '☐'}</span><i>${qtext(q)} → +${q.gold}🪙 +${q.xp}XP</i></div>`).join('')}
+          <p>Дейлики — выбери 3 из 5 (сброс в полночь):</p>
+          ${(qd.dailies || []).map((q) => {
+            const on = active.includes(q.id);
+            return `<div class="lrow"><span>${done.includes(q.id) ? '☑' : on ? '✅' : '☐'}</span><i>${qtext(q)} → +${q.gold}🪙 +${q.xp}XP</i>${!done.includes(q.id) ? `<button data-qpick="${q.id}">${on ? 'убрать' : 'взять'}</button>` : ''}</div>`;
+          }).join('')}
+          <p>Викли (понедельник):</p>
+          <div class="lrow"><span>${(meta.weekly?.done || []).includes('conqueror') ? '☑' : '☐'}</span><i>Завоеватель: 3 флага разом ${Math.floor((meta.weekly?.prog || {}).conqueror || 0)}/600с → +400🪙 +600XP</i></div>
+          <div class="lrow"><span>${(meta.weekly?.done || []).includes('duelist') ? '☑' : '☐'}</span><i>Дуэлянт: побед на неделе ${(meta.weekly?.wins || 0)}/3 → +400🪙 +600XP</i></div>
+          <p>Клановые (лайфтайм → очки):</p>
+          ${(qd.clanQuests || []).map((q) => {
+            const cd = meta.clan.qdone || [];
+            const cur = q.res === 'woodTotal' ? Math.floor(meta.stats.wood || 0) : q.res === 'towersTotal' ? (meta.stats.towers || 0) : (meta.stats.kills || 0);
+            return `<div class="lrow"><span>${cd.includes(q.id) ? '☑' : '☐'}</span><i>${q.name}: ${cur}/${q.need} → +${q.points} очк.</i></div>`;
+          }).join('')}
           <p>Героические (${meta.hero.arch}):</p>
           ${(qd.heroQuests || []).map((q) => `<div class="lrow"><span>${done.includes(`hq_${q.id}`) ? '☑' : '☐'}</span><i>${hqtext(q)} → +${q.gold}🪙 +${q.xp}XP</i></div>`).join('')}
           <p class="dim">Фраги всего: ${meta.stats.kills} • Построек: ${meta.stats.built} • Меток: ${meta.stats.marks}</p>`;
@@ -172,6 +186,9 @@ export class GameUI {
       });
       this.overlay.querySelectorAll('[data-shop]').forEach((b) => {
         b.onclick = () => { cb.onShop(b.dataset.shop); draw(); };
+      });
+      this.overlay.querySelectorAll('[data-qpick]').forEach((b) => {
+        b.onclick = () => { cb.onQuestPick(b.dataset.qpick); draw(); };
       });
       const cn = this.overlay.querySelector('#clanName');
       if (cn) cn.onchange = () => cb.onClanName(cn.value);

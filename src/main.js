@@ -475,12 +475,18 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
       }
       if (state.droppedGear.length) rewardText += ` • Шмот: ${state.droppedGear.length} шт.`;
       saveMeta(meta);
-      // квесты таверны + автосезон
+      // квесты таверны + автосезон (афк <5 мин или APM<5 — без прогресса)
+      const ordersN = rec.orders.length;
+      const afk = state.t < 300 || ordersN < 25;
       const qdone = settleQuests(meta, questsData, {
         wood: state.quest.wood, food: state.quest.food, neutrals: state.quest.neutrals,
-        flagSec: state.quest.flagSec, battles: 1, orders: rec.orders.length,
+        flagSec: state.quest.flagSec, flag3Sec: state.quest.flag3Sec || 0, battles: 1, orders: ordersN,
         heroKills: state.quest.heroKills || 0, built: state.quest.built,
-        marks: state.quest.marks, heroArch: meta.hero.arch, wins: win ? 1 : 0,
+        marks: state.quest.marks, unbrHold: state.quest.unbrHold || 0,
+        ambushCaps: state.quest.ambushCaps || 0, auraBuilds: state.quest.auraBuilds || 0,
+        convoyHeal: state.quest.convoyHeal || 0,
+        towers: state.buildings.filter((b) => b.owner === 'player' && b.type === 'tower' && b.hp > 0).length,
+        heroArch: meta.hero.arch, wins: win ? 1 : 0, afk,
       });
       if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
       if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
@@ -1014,11 +1020,16 @@ async function startOnline(lobbyCfg, meta) {
         meta.stats.maxSquads = Math.max(meta.stats.maxSquads || 0, view.squads.filter((s) => s.owner === me()).length);
         meta.stats.flagsCapped = (meta.stats.flagsCapped || 0) + view.flags.filter((f) => f.owner && teamOf(view, f.owner) === teamOf(view, me())).length;
         saveMeta(meta);
+        const afkOnline = view.t < 300 || ordersSent < 25;
         const qdone = settleQuests(meta, questsData, {
           wood: view.quest.wood, food: view.quest.food, neutrals: view.quest.neutrals,
-          flagSec: view.quest.flagSec, battles: 1, orders: ordersSent,
+          flagSec: view.quest.flagSec, flag3Sec: view.quest.flag3Sec || 0, battles: 1, orders: ordersSent,
           heroKills: view.quest.heroKills || 0, built: view.quest.built,
-          marks: view.quest.marks, heroArch: meta.hero.arch, wins: win ? 1 : 0,
+          marks: view.quest.marks, unbrHold: view.quest.unbrHold || 0,
+          ambushCaps: view.quest.ambushCaps || 0, auraBuilds: view.quest.auraBuilds || 0,
+          convoyHeal: view.quest.convoyHeal || 0,
+          towers: view.buildings.filter((b) => b.owner === me() && b.type === 'tower' && b.hp > 0).length,
+          heroArch: meta.hero.arch, wins: win ? 1 : 0, afk: afkOnline,
         });
         if (qdone.length) rewardText += ' • ' + qdone.join(' • ');
         if (autoSeason(meta)) rewardText += ' • Новый сезон (авто-вайп)!';
@@ -1277,6 +1288,16 @@ bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK
   onTrack: (id) => { claimTrack(meta, id, heroesData.maxLevel); },
   onVacation: () => { meta.vacationUntil = Date.now() + 7 * 86400000; saveMeta(meta); },
   onVacationEnd: () => { meta.vacationUntil = 0; saveMeta(meta); },
+  onQuestPick: (qid) => {
+    const a = meta.quests.active || (meta.quests.active = []);
+    const ix = a.indexOf(qid);
+    if (ix >= 0) {
+      if (a.length > 1) a.splice(ix, 1);
+    } else if (a.length < 3) {
+      a.push(qid);
+    }
+    saveMeta(meta);
+  },
   onWorld: () => startWorld(),
   onEquip: (id) => {
     const ix = (meta.hero.inventory || []).findIndex((it) => it.id === id);

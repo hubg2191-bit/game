@@ -12,8 +12,16 @@
     { "id": "duelist", "name": "Дуэлянт", "need": "3 wins", "gold": 400, "xp": 600 }
   ],
   "heroQuests": [
-    { "hero": "warlord", "id": "kill30", "need": 30, "gold": 100, "xp": 200 },
-    { "hero": "ranger", "id": "marks5", "need": 5, "gold": 100, "xp": 200 },
-    { "hero": "steward", "id": "build3", "need": 3, "gold": 100, "xp": 200 }
+    { "hero": "warlord", "id": "kill30", "name": "Резня", "need": 30, "gold": 100, "xp": 200 },
+    { "hero": "warlord", "id": "unbr_hold", "name": "Стоять насмерть", "need": 3, "gold": 150, "xp": 250 },
+    { "hero": "ranger", "id": "ambush_cap", "name": "Тихий захват", "need": 2, "gold": 100, "xp": 200 },
+    { "hero": "ranger", "id": "marks5", "name": "Метки", "need": 5, "gold": 100, "xp": 200 },
+    { "hero": "steward", "id": "aura_build", "name": "Хозяйская рука", "need": 3, "gold": 100, "xp": 200 },
+    { "hero": "steward", "id": "convoy_heal", "name": "Обозный", "need": 1000, "gold": 150, "xp": 250 }
+  ],
+  "clanQuests": [
+    { "id": "treasury", "name": "Казна", "need": 5000, "res": "woodTotal", "points": 500 },
+    { "id": "fortress", "name": "Крепость", "need": 10, "res": "towersTotal", "points": 500 },
+    { "id": "blood", "name": "Кровь", "need": 100, "res": "killsTotal", "points": 700 }
   ]
 }

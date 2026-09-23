@@ -421,7 +421,7 @@ export function createGame(map, unitsData, buildingsData, rules, racesData, cfg 
       gaps: (map.passages || []).map((ps) => ({ z: m(ps.z), half: m(ps.width || 6) / 2 + 2 })),
     } : null,
     score: ffa ? Object.fromEntries(pids.map((p) => [p, 0])) : { A: 0, B: 0 },
-    quest: { wood: 0, food: 0, neutrals: 0, flagSec: 0, marks: 0, built: 0 }, // счётчики для таверны
+    quest: { wood: 0, food: 0, neutrals: 0, flagSec: 0, marks: 0, built: 0, flag3Sec: 0, unbrHold: 0, ambushCaps: 0, auraBuilds: 0, convoyHeal: 0 }, // счётчики для таверны
     allyDirective: null, // кооп-пинги: {kind:'attack',x,z} | {kind:'defend'} | {kind:'follow'}
     pings: [], // маркеры пингов {x,z,t,team}
     missionNoEnd: !!cfg.missionNoEnd, // миссии 1-4: конец только по целям
@@ -603,7 +603,14 @@ export function construct(state, pid, typeId, x, z) {
   const t = buildTime(def);
   addBuilding(state, pid, typeId, x, z, { hp: 1, buildT: t, buildTotal: t });
   recalcPop(state);
-  if (pid === 'player') state.quest.built += 1;
+  if (pid === 'player') {
+    state.quest.built += 1;
+    // квест: здание под аурой наместника
+    const sh = heroOf(state, pid);
+    if (sh && sh.hero.arch === 'steward' && Math.hypot(sh.x - x, sh.z - z) <= 5.5) {
+      state.quest.auraBuilds += 1;
+    }
+  }
   event(state, `Строится: ${def.name}`);
   return true;
 }
@@ -665,11 +672,16 @@ export function castSkill(state, pid, heroId, slot, targetRef = null) {
   } else if (sk.id === 'convoy') {
     const p = state.players[pid];
     p.res.food = Math.min(capOf(state, pid, 'food'), p.res.food + sk.food);
+    let healed = 0;
     for (const b of ownBuildingsIn(sk.radius)) {
       if (b.type === 'wall' || b.type === 'siege_workshop' || b.type === 'tower') {
-        b.hp = Math.min(b.hpMax, b.hp + sk.repair);
+        const miss = b.hpMax - b.hp;
+        const fix = Math.min(miss, sk.repair);
+        b.hp += fix;
+        healed += fix;
       }
     }
+    if (pid === 'player') state.quest.convoyHeal += Math.round(healed);
     ok = true;
   } else if (sk.id === 'fortify') {
     for (const b of ownBuildingsIn(sk.radius)) {
@@ -1491,6 +1503,19 @@ function updateFlags(state, dt) {
           if (s.type === 'hero' && s.count > 0 && teamOf(state, s.owner) === lead
             && (state.mode !== 'ffa' ? lead === 'A' : true)) s.hero.xpBattle += 150;
         }
+        // квесты героя: точка под Несгибаемыми / снятие засадой (команда A)
+        if (lead === 'A' || (state.mode === 'ffa' && lead === 'player')) {
+          let unbr = false;
+          let amb = false;
+          for (const s of state.squads) {
+            if (s.owner !== 'player' || s.count <= 0) continue;
+            if ((s.x - f.x) ** 2 + (s.z - f.z) ** 2 > CAPTURE_RADIUS * CAPTURE_RADIUS) continue;
+            if (s.unbrT > 0) unbr = true;
+            if ((s.invisT || 0) > 0) amb = true;
+          }
+          if (unbr) state.quest.unbrHold += 1;
+          if (amb) state.quest.ambushCaps += 1;
+        }
       }
     } else {
       f.progress = Math.max(0, f.progress - dt * 0.05);
@@ -1507,6 +1532,7 @@ function updateFlags(state, dt) {
     state.score.A += rate(owned.A) * dt;
     state.score.B += rate(owned.B) * dt;
     if (owned.A > 0) state.quest.flagSec += dt;
+    if (owned.A >= 3) state.quest.flag3Sec += dt; // Завоеватель: 3 флага разом
   }
 }
 
