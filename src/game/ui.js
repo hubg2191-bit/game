@@ -121,6 +121,8 @@ export class GameUI {
             const can = !done && t.check(meta);
             return `<div class="lrow"><span>${done ? '☑' : can ? '✅' : '☐'}</span><i>${t.name}</i>${!done && can ? `<button data-track="${t.id}">Забрать</button>` : ''}</div>`;
           }).join('')}
+          <p>Сезонный магазин (очки клана: ${meta.clan.points || 0}):</p>
+          ${(ctx.shop || []).map((it) => `<div class="lrow"><button data-shop="${it.id}" ${(meta.clan.points || 0) >= it.cost ? '' : 'disabled'}>${it.name} — ${it.cost} очк.</button></div>`).join('')}
           <p class="dim">Вайп: столица жмётся до ур.1, герои/шмот/золото/MMR остаются.</p>
           <button id="mWipe">Ручной вайп сезона</button>`;
       }
@@ -164,6 +166,9 @@ export class GameUI {
       if (ve) ve.onclick = () => { cb.onVacationEnd(); draw(); };
       this.overlay.querySelectorAll('[data-track]').forEach((b) => {
         b.onclick = () => { cb.onTrack(b.dataset.track); draw(); };
+      });
+      this.overlay.querySelectorAll('[data-shop]').forEach((b) => {
+        b.onclick = () => { cb.onShop(b.dataset.shop); draw(); };
       });
       const cn = this.overlay.querySelector('#clanName');
       if (cn) cn.onchange = () => cb.onClanName(cn.value);

@@ -80,8 +80,7 @@ export const TRACK = [
   { id: 'd6', name: 'День 6: выиграй схватку', check: (m) => (m.stats.wins || 0) >= 1, reward: { xp: 300 } },
   { id: 'd7', name: 'День 7: переживи рейд (2 победы)', check: (m) => (m.stats.wins || 0) >= 2, reward: { purpleAmulet: true } },
 ];
-export function claimTrack(m, id, maxLevel = 30) {
-  const t = TRACK.find((x) => x.id === id);
+export function claimTrack(m, id, maxLevel = 30) {  const t = TRACK.find((x) => x.id === id);
   if (!t || (m.track.done || []).includes(id) || !t.check(m)) return null;
   m.track.done.push(id);
   if (t.reward.gold) m.capital.gold += t.reward.gold;
@@ -101,6 +100,21 @@ export function claimTrack(m, id, maxLevel = 30) {
 }
 export function xpNext(level) {
   return Math.floor(100 * Math.pow(level, 1.5));
+}
+// Сезонный магазин: фиолет за очки клана (leveling-gear.md)
+export const SEASON_SHOP = [
+  { id: 'shop-purple', name: 'Фиолет (случайный)', cost: 500, give: { tier: 'purple' } },
+  { id: 'shop-blue-weapon', name: 'Синее оружие', cost: 200, give: { tier: 'blue', slot: 'weapon' } },
+  { id: 'shop-gold', name: '500 золота', cost: 100, give: { gold: 500 } },
+];
+export function buyShop(m, itemId) {
+  const item = SEASON_SHOP.find((x) => x.id === itemId);
+  if (!item || (m.clan.points || 0) < item.cost) return null;
+  m.clan.points -= item.cost;
+  if (item.give.gold) m.capital.gold += item.give.gold;
+  else m.hero.inventory.push(rollGear(Math.random, item.give.tier, item.give.slot || null));
+  saveMeta(m);
+  return item;
 }
 // Награды схватки (01-modes, leveling-gear): победа 500з+800xp, поражение 150+300; с 4-го боя дня — 20%
 export function battleRewards(win, battlesToday) {

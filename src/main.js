@@ -11,7 +11,7 @@ import { GameRender } from './game/render.js';
 import { GameUI } from './game/ui.js';
 import {
   loadMeta, saveMeta, offlineEarnings, applyBattleResult, wipeSeason, rollGear,
-  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext, TRACK, claimTrack, checkComeback,
+  grantMissionReward, autoSeason, settleQuests, craftPurple, pendingPerks, xpNext, TRACK, claimTrack, checkComeback, SEASON_SHOP, buyShop,
 } from './game/meta.js';
 import { MISSIONS, setupMission, missionProgress, missionDone } from './game/missions.js';
 import unitsData from './game/data/units.json';
@@ -1219,10 +1219,11 @@ function openLobby() {
     (cfg) => startMatch(cfg, null, meta)
   );
 }
-bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK, comeback }, {
+bootUI.showMeta(meta, { heroesData, racesData, questsData, offline, track: TRACK, shop: SEASON_SHOP, comeback }, {
   onArch: (arch) => { meta.hero.arch = arch; saveMeta(meta); },
   onPerk: (id) => { meta.hero.perks.push(id); saveMeta(meta); },
   onCraft: (itemId) => { craftPurple(meta, itemId); },
+  onShop: (itemId) => { buyShop(meta, itemId); },
   onTrack: (id) => { claimTrack(meta, id, heroesData.maxLevel); },
   onVacation: () => { meta.vacationUntil = Date.now() + 7 * 86400000; saveMeta(meta); },
   onVacationEnd: () => { meta.vacationUntil = 0; saveMeta(meta); },
