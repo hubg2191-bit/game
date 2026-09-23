@@ -46,10 +46,6 @@ export class GameRender {
     this.scene.add(sun);
 
     this.buildGround(state);
-    this.buildStatics(state);
-    this.buildFog(state);
-    this.buildRiver(state);
-    this.buildMountains(state);
 
     this.dyn = new THREE.Group(); // здания, отряды, флаги
     this.scene.add(this.dyn);
@@ -86,12 +82,17 @@ export class GameRender {
       ring.visible = false;
       this.scene.add(ring);
       this.markRings.push(ring);
-    }    for (let i = 0; i < 48; i++) {
+    }
+    for (let i = 0; i < 48; i++) {
       const mesh = new THREE.Mesh(this.tracerGeo, this.tracerMat);
       mesh.visible = false;
       this.scene.add(mesh);
       this.tracers.push({ mesh, t: 0, dur: 0, from: new THREE.Vector3(), to: new THREE.Vector3() });
     }
+    this.buildStatics(state);
+    this.buildFog(state);
+    this.buildRiver(state);
+    this.buildMountains(state);
     this.resize();
   }
 

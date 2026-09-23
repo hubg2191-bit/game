@@ -96,7 +96,6 @@ function startMatch(lobbyCfg, replayRec = null, meta = null) {
   const rec = replayRec || { seed: cfg.seed, cfg: lobbyCfg, hero: cfg.hero, orders: [] };
   let replayIdx = 0;
   let pendingSkill = null; // 'q' | 'e' для прицельных скиллов (засада/метка)
-  ui.pendingSkill = null;
 
   const heroAlive = () => state.squads.find((s) => s.owner === 'player' && s.type === 'hero' && s.count > 0);
   const record = (fn, args) => {
