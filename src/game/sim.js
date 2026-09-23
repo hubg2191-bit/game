@@ -257,10 +257,15 @@ export function spawnHero(state, pid, arch, level, gear, perks = []) {
   s.hero = {
     arch, level, gearMorale: merged.morale || 0,
     mana: def.manaMax, qCd: 0, eCd: 0, xpBattle: 0,
+    militiaCd: 60, // первый свист ополчения через минуту
   };
   return s;
 }
-// Опыт за фраг (leveling-gear.md): засчитывается герою-убийце в радиусе 30м
+// Пассивка героя из heroes.json (warlord/steward/ranger × 2)
+export function heroPassive(state, arch, id) {
+  const H = state.heroesData?.heroes.find((h) => h.id === arch);
+  return H?.passives?.find((p) => p.id === id);
+}
 function awardXp(state, pid, amount) {
   const h = heroOf(state, pid);
   if (h) h.hero.xpBattle += amount;
@@ -906,8 +911,15 @@ function dealDamage(state, src, target, mult = 1) {
   // src: {type} для отрядов (урон из data) или {dmg} для башен
   const def = src.type && src.type !== '__tower' ? defOf(state, src.type, src.owner) : null;
   const baseDmg = def ? def.dmg : src.dmg || 10;
+  // залп отряда: бьёт каждый живой боец (combat-v02: DPS = dmg*size/interval)
+  let volley = 1;
+  if (src.count !== undefined && src.soldiers) {
+    volley = 0;
+    for (const sol of src.soldiers) if (sol.alive) volley++;
+    if (volley <= 0) return;
+  }
   const srcRanged = !def ? true : (def.range || 0) > 0;
-  let dmg = baseDmg * mult;
+  let dmg = baseDmg * volley * mult;
   if (state.phase === 'build') dmg *= 0.5; // фаза стройки rooms.md: урон 50%
   if (def && e.type && CAV_IDS.has(e.type) && def.bonusVsCav) dmg *= def.bonusVsCav;
   if (def && e.count !== undefined) {
@@ -925,10 +937,21 @@ function dealDamage(state, src, target, mult = 1) {
   if (e.markT > 0) dmg *= 1.3;
   const fm = e.count !== undefined ? flankMultOf(state, src, e) : 1;
   dmg *= fm;
-  // аура воеводы: +5% урона ближним рядом
+  // аура воеводы: +5% урона ближним рядом + Полководец (пассив): +5% за пару отрядов рядом, макс +15%
   if (def && (def.range || 0) === 0 && e.count !== undefined) {
     const wh = heroOf(state, src.owner);
-    if (wh && wh.hero.arch === 'warlord' && Math.hypot(src.x - wh.x, src.z - wh.z) <= 5.5) dmg *= 1.05;
+    if (wh && wh.hero.arch === 'warlord' && Math.hypot(src.x - wh.x, src.z - wh.z) <= 5.5) {
+      dmg *= 1.05;
+      const cmd = heroPassive(state, 'warlord', 'commander');
+      if (cmd) {
+        let n = 0;
+        for (const q of state.squads) {
+          if (q.owner !== src.owner || q.count <= 0 || q.id === wh.id) continue;
+          if (Math.hypot(q.x - wh.x, q.z - wh.z) <= (cmd.radius || 5.5)) n++;
+        }
+        dmg *= 1 + Math.min(cmd.max || 0.15, (cmd.perPair || 0.05) * Math.floor(n / 2));
+      }
+    }
   }
   // атака снимает засаду
   if (src.invisT) src.invisT = 0;
@@ -994,9 +1017,22 @@ function onSquadWiped(state, src, e) {
       const p = state.players[killer];
       const R = (state.racesData?.races || []).find((r) => r.id === state.raceOf[killer]);
       const loot = R?.lootMult || 1; // каганат: грабеж +30%
+      // Трофеи воеводы + Добыча следопыта на золото с лагерей
+      let campGold = 1;
+      const kh = heroOf(state, killer);
+      if (kh && Math.hypot(kh.x - e.x, kh.z - e.z) <= 7.5) {
+        if (kh.hero.arch === 'warlord') {
+          const tr = heroPassive(state, 'warlord', 'trophies');
+          if (tr) campGold *= tr.goldMult || 1.1;
+        }
+        if (kh.hero.arch === 'ranger') {
+          const pr = heroPassive(state, 'ranger', 'prey');
+          if (pr) campGold *= pr.goldMult || 1.5;
+        }
+      }
       const parts = [];
       for (const [k, v] of Object.entries(nd.reward)) {
-        const amt = Math.round(v * (k === 'gold' || k === 'food' ? loot : 1));
+        const amt = Math.round(v * (k === 'gold' || k === 'food' ? loot : 1) * (k === 'gold' ? campGold : 1));
         p.res[k] = Math.min(capOf(state, killer, k), p.res[k] + amt);
         parts.push(`+${amt} ${k === 'food' ? 'еды' : 'золота'}`);
       }
@@ -1031,6 +1067,37 @@ function updateSquad(state, s, dt) {
     s.hero.mana = Math.min(def.manaMax, s.hero.mana + 2 * dt);
     s.hero.qCd = Math.max(0, s.hero.qCd - dt);
     s.hero.eCd = Math.max(0, s.hero.eCd - dt);
+    // Ополчение по свистку (наместник): бесплатный отряд у Ратуши на 60 сек
+    if (s.hero.arch === 'steward') {
+      s.hero.militiaCd = Math.max(0, (s.hero.militiaCd || 0) - dt);
+      const mc = heroPassive(state, 'steward', 'militia_call');
+      if (mc && s.hero.militiaCd <= 0) {
+        const th = state.buildings.find((b) => b.owner === s.owner && b.type === 'townhall' && b.hp > 0);
+        if (th) {
+          const militiaDef = unitById(state.units, 'militia');
+          const q = addSquad(state, s.owner, 'militia', th.x + 6, th.z + 6, {
+            def: { ...militiaDef, size: mc.size || 12 },
+          });
+          q.tempT = mc.dur || 60;
+          s.hero.militiaCd = mc.cd || 180;
+          recalcPop(state);
+          if (s.owner === 'player') event(state, 'Ополчение по свистку! (60 сек)', 'flag');
+        } else {
+          s.hero.militiaCd = 30; // нет Ратуши — проверить позже
+        }
+      }
+    }
+  }
+  // временные отряды (ополчение по свистку) тают
+  if (s.tempT > 0) {
+    s.tempT -= dt;
+    if (s.tempT <= 0) {
+      s.count = 0;
+      s.hp = 0;
+      if (s.owner === 'player') event(state, 'Ополчение разошлось по домам', 'info');
+      recalcPop(state);
+      return;
+    }
   }
   const neutral = s.owner === 'neutral';
 
@@ -1200,8 +1267,19 @@ function updateSquad(state, s, dt) {
       speed *= R.cavSpeedMult || 1;
       if (nearOwn(state, s.owner, 'tabun_kaganat', s.x, s.z, 6.25)) speed *= 1.1;
     }
-    speed *= waterMult(state, s.x, s.z); // река -40%
-    speed *= mountainMult(state, s.x, s.z); // горы -50%
+    // местность: река -40%, горы -50%; Шаг следопыта игнорит штрафы на 50% в ауре
+    let wm = waterMult(state, s.x, s.z);
+    let mm = mountainMult(state, s.x, s.z);
+    {
+      const rh = heroOf(state, s.owner);
+      const st = rh && rh.hero.arch === 'ranger' ? heroPassive(state, 'ranger', 'step') : null;
+      if (rh && st && Math.hypot(s.x - rh.x, s.z - rh.z) <= (st.radius || 5.5)) {
+        const ig = st.ignore ?? 0.5;
+        wm = 1 - (1 - wm) * ig;
+        mm = 1 - (1 - mm) * ig;
+      }
+    }
+    speed *= wm * mm;
     const step = Math.min(d, speed * dt);
     s.x += ((moveX - s.x) / d) * step;
     s.z += ((moveZ - s.z) / d) * step;
@@ -1266,7 +1344,17 @@ function updateEconomy(state, dt) {
       if (def.taxGoldPerMin) {
         // у Ратуши налог — массив по уровням, у остальных — число
         const tax = Array.isArray(def.taxGoldPerMin) ? def.taxGoldPerMin[b.level - 1] : def.taxGoldPerMin;
-        prod.gold += ((tax / 60) * goldBuff * goldMult);
+        let rate = (tax / 60) * goldBuff * goldMult;
+        // Подати наместника: +10% золота со всех налогов, пока герой в городе (40м от Ратуши)
+        const sh = heroOf(state, pid);
+        const tx = sh && sh.hero.arch === 'steward' ? heroPassive(state, 'steward', 'taxes') : null;
+        if (sh && tx) {
+          const home = state.buildings.find((x) => x.owner === pid && x.type === 'townhall' && x.hp > 0);
+          if (home && Math.hypot(sh.x - home.x, sh.z - home.z) <= (tx.radius || 10)) {
+            rate *= tx.goldMult || 1.1;
+          }
+        }
+        prod.gold += rate;
       }
       eaters += def.workers || 0;
     }
